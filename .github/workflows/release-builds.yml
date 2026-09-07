@@ -39,7 +39,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Download UI build
       uses: actions/download-artifact@v7
       with:
@@ -103,7 +105,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Download UI build
       uses: actions/download-artifact@v7
       with:
@@ -179,7 +183,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Download UI build
       uses: actions/download-artifact@v7
       with:
@@ -249,7 +255,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Download UI build
       uses: actions/download-artifact@v7
       with:
@@ -329,7 +337,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Download UI build
       uses: actions/download-artifact@v7
       with:
@@ -432,7 +442,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Download UI build
       uses: actions/download-artifact@v7
       with:
@@ -551,7 +563,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Download UI build
       uses: actions/download-artifact@v7
       with:
@@ -614,7 +628,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Install Ninja
       run: |
         choco install ninja
@@ -767,7 +783,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Install Vulkan SDK
       id: get_vulkan
       if: ${{ matrix.backend == 'vulkan' }}
@@ -843,7 +861,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Install Cuda Toolkit
       uses: ./.github/actions/windows-setup-cuda
       with:
@@ -926,7 +946,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Download & Install oneAPI
       shell: bash
       run: |
@@ -1029,7 +1051,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Download & Install oneAPI
       shell: bash
       run: |
@@ -1111,7 +1135,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Download UI build
       uses: actions/download-artifact@v7
       with:
@@ -1219,7 +1245,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: Setup Xcode
       run: |
         sudo xcode-select -s /Applications/Xcode_26.4.app
@@ -1283,7 +1311,9 @@ jobs:
         path: ${{ runner.temp }}/isa-source
     - name: Extract patched source
       shell: bash
-      run: tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
+      run: |-
+        cd "$GITHUB_WORKSPACE"
+        tar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"
     - name: UI version
       id: version
       shell: bash

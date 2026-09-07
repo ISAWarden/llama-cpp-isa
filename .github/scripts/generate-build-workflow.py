@@ -28,8 +28,8 @@ def source_steps():
          'with': {'name': 'patched-source', 'path': '${{ runner.temp }}/isa-source'}},
         {'name': 'Extract patched source', 'shell': 'bash',
          # Git Bash tar interprets a Windows drive colon as a remote host.
-         # Let the shell open the archive and feed it through stdin instead.
-         'run': 'tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"'},
+         # Let Bash handle both Windows paths, including the destination.
+         'run': 'cd "$GITHUB_WORKSPACE"\ntar -xzf - < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"'},
     ]
 
 
