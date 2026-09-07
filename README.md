@@ -75,3 +75,23 @@ To update upstream, first disable all patches, fetch and check out the desired o
 ```sh
 ctest --test-dir llama.cpp/build -R test-turbo-quant --output-on-failure
 ```
+
+## GitHub release builds
+
+The **Release** workflow builds all maintained patches on the pinned upstream base. Pushes to `main` or `master` that change the submodule, patches, patch manager, or release automation publish an `isa-<run-number>-<commit>` prerelease after every platform build and packaging job succeeds. In **Actions → Release → Run workflow**, leave `create_release` unchecked for compile verification, or check it to publish. Build-only runs retain a complete `release-bundle` artifact for seven days.
+
+The matrix follows upstream's release recipes: macOS ARM64/Intel, iOS XCFramework, Linux x64/ARM64 CPU and Vulkan, Linux x64 ROCm/OpenVINO/SYCL, Android ARM64, Windows x64/ARM64 CPU, Windows CUDA/Vulkan/OpenCL/ROCm/OpenVINO/SYCL, and the UI. Upstream's custom s390x runner and disabled openEuler/KleidiAI builds are omitted. GPU jobs compile on hosted runners; they do not establish GPU runtime correctness or performance. All TurboQuant formats remain experimental, and only turbo4 has Vulkan acceleration.
+
+A Linux preparation job uses `configure.py --all`, archives the exact patched tree including added files, and checks that `--none` restores pristine upstream. Every platform consumes that same archive. The release includes upstream-style download links, runtime packages, `SHA256SUMS`, and a manifest with the parent commit, upstream base, enabled features, and patch hashes. Publication uses a draft until all uploads complete. An already published release is left unchanged on retries.
+
+Build recipes and dependency setup actions come from the pinned `llama.cpp/.github/` files. GitHub requires reusable workflows in this parent repository, so `.github/workflows/release-builds.yml` is generated, with a drift check before builds. After updating upstream or changing the adaptation script:
+
+```sh
+python3 -m pip install PyYAML==6.0.2
+python3 .github/scripts/generate-build-workflow.py
+python3 .github/scripts/generate-build-workflow.py --check
+```
+
+The matrix downloads substantial SDKs and uses GitHub Actions runner time. GitHub Actions must be enabled and repository policy must allow the publish job's `contents: write` permission; no custom release secret is required. Manual dispatch becomes available once the workflow is on the default branch.
+
+The repository skill at `.agents/skills/compile-verifier/SKILL.md` diagnoses these builds and carries fixes through the patch workflow. It defaults manual verification runs to `create_release=false` and uses existing session authorization for commits and pushes.

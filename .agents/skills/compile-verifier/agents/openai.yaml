@@ -1,0 +1,4 @@
+interface:
+  display_name: "Compile Verifier"
+  short_description: "Push and verify release builds"
+  default_prompt: "Use $compile-verifier to push my repo changes, trigger the release workflow with gh, inspect failures, fix them, and retry."
