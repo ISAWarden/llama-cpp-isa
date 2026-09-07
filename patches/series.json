@@ -1,0 +1,20 @@
+{
+  "base": "5202104b59ada9005db079eea43882a2b7bf5802",
+  "features": [
+    {
+      "name": "turboquant",
+      "description": "Experimental 2/3/4-bit KV cache and TQ3_1S/TQ4_1S weights; CPU implementation"
+    },
+    {
+      "name": "turboquant_vulkan",
+      "description": "Vulkan turbo4 KV cache and WHT acceleration",
+      "requires": [
+        "turboquant"
+      ]
+    },
+    {
+      "name": "moe_expert_cache",
+      "description": "Optional device-resident MoE expert slice cache (--moe-expert-cache MiB)"
+    }
+  ]
+}
