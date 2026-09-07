@@ -27,7 +27,9 @@ def source_steps():
         {'name': 'Download patched source', 'uses': 'actions/download-artifact@v7',
          'with': {'name': 'patched-source', 'path': '${{ runner.temp }}/isa-source'}},
         {'name': 'Extract patched source', 'shell': 'bash',
-         'run': 'tar -xzf "$RUNNER_TEMP/isa-source/patched-source.tar.gz" -C "$GITHUB_WORKSPACE"'},
+         # Git Bash tar interprets a Windows drive colon as a remote host.
+         # Let the shell open the archive and feed it through stdin instead.
+         'run': 'tar -xzf - -C "$GITHUB_WORKSPACE" < "$RUNNER_TEMP/isa-source/patched-source.tar.gz"'},
     ]
 
 

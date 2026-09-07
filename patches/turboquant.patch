@@ -534,10 +534,10 @@ index 1ebc50a76..1e41eb530 100644
              {
                  fprintf(stderr, "%s: invalid type %d\n", __func__, type);
 diff --git a/ggml/src/ggml-quants.h b/ggml/src/ggml-quants.h
-index 75188f1af..e3f72068e 100644
+index 75188f1af..1a2a372ee 100644
 --- a/ggml/src/ggml-quants.h
 +++ b/ggml/src/ggml-quants.h
-@@ -105,6 +105,28 @@ GGML_API size_t quantize_q8_0(const float * GGML_RESTRICT src, void * GGML_RESTR
+@@ -105,6 +105,29 @@ GGML_API size_t quantize_q8_0(const float * GGML_RESTRICT src, void * GGML_RESTR
  GGML_API size_t quantize_mxfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
  GGML_API size_t quantize_nvfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
  
@@ -551,6 +551,7 @@ index 75188f1af..e3f72068e 100644
 +GGML_API void quantize_row_turbo2_0_ref(const float * GGML_RESTRICT x, block_turbo2_0 * GGML_RESTRICT y, int64_t k);
 +GGML_API void dequantize_row_turbo2_0(const block_turbo2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 +GGML_API size_t quantize_turbo2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
++GGML_API void turbo_cpu_fwht(float * x, int group_size);
 +GGML_API void turbo_cpu_fwht_inverse(float * x, int group_size);
 +
 +// TQ3_1S: WHT-rotated 3-bit weight quantization (8-level Lloyd-Max)
@@ -2533,7 +2534,7 @@ index 9510ac14c..d32590ddc 100644
                  ? MAX_DOT_PRODUCT_ERROR_FP4
 diff --git a/tests/test-turbo-quant.c b/tests/test-turbo-quant.c
 new file mode 100644
-index 000000000..aaaa4450f
+index 000000000..6475ee940
 --- /dev/null
 +++ b/tests/test-turbo-quant.c
 @@ -0,0 +1,77 @@
@@ -2571,11 +2572,11 @@ index 000000000..aaaa4450f
 +    dequantize_row_turbo3_0(buf, output, d);
 +    turbo_cpu_fwht_inverse(output, d);
 +    printf("Test 1 (turbo3): e0 = [1, 0, ...]\n");
-+    printf("  In:  [%.6f, %.6f, %.6f, %.6f]\n", input[0], input[1], input[2], input[3]);
-+    printf("  Out: [%.6f, %.6f, %.6f, %.6f]\n", output[0], output[1], output[2], output[3]);
++    printf("  In:  [%.6f, %.6f, %.6f, %.6f]\n", (double) (input[0]), (double) (input[1]), (double) (input[2]), (double) (input[3]));
++    printf("  Out: [%.6f, %.6f, %.6f, %.6f]\n", (double) (output[0]), (double) (output[1]), (double) (output[2]), (double) (output[3]));
 +    mse = cosv = ni = no = 0;
 +    for (int i = 0; i < d; i++) { mse += (input[i]-output[i])*(input[i]-output[i]); cosv += input[i]*output[i]; ni += input[i]*input[i]; no += output[i]*output[i]; }
-+    printf("  MSE=%.8f Cosine=%.6f OutNorm=%.6f\n\n", mse/d, ni > 0 && no > 0 ? cosv/sqrtf(ni)/sqrtf(no) : 0, sqrtf(no));
++    printf("  MSE=%.8f Cosine=%.6f OutNorm=%.6f\n\n", (double) (mse/d), (double) (ni > 0 && no > 0 ? cosv/sqrtf(ni)/sqrtf(no) : 0), (double) (sqrtf(no)));
 +
 +    if (!isfinite(no) || cosv/sqrtf(ni*no) < 0.99f) return 1;
 +
@@ -2585,11 +2586,11 @@ index 000000000..aaaa4450f
 +    dequantize_row_turbo3_0(buf, output, d);
 +    turbo_cpu_fwht_inverse(output, d);
 +    printf("Test 2 (turbo3): sin*10\n");
-+    printf("  In:  [%.4f, %.4f, %.4f, %.4f]\n", input[0], input[1], input[2], input[3]);
-+    printf("  Out: [%.4f, %.4f, %.4f, %.4f]\n", output[0], output[1], output[2], output[3]);
++    printf("  In:  [%.4f, %.4f, %.4f, %.4f]\n", (double) (input[0]), (double) (input[1]), (double) (input[2]), (double) (input[3]));
++    printf("  Out: [%.4f, %.4f, %.4f, %.4f]\n", (double) (output[0]), (double) (output[1]), (double) (output[2]), (double) (output[3]));
 +    mse = cosv = ni = no = 0;
 +    for (int i = 0; i < d; i++) { mse += (input[i]-output[i])*(input[i]-output[i]); cosv += input[i]*output[i]; ni += input[i]*input[i]; no += output[i]*output[i]; }
-+    printf("  MSE=%.8f Cosine=%.6f InNorm=%.2f OutNorm=%.2f\n\n", mse/d, cosv/sqrtf(ni)/sqrtf(no), sqrtf(ni), sqrtf(no));
++    printf("  MSE=%.8f Cosine=%.6f InNorm=%.2f OutNorm=%.2f\n\n", (double) (mse/d), (double) (cosv/sqrtf(ni)/sqrtf(no)), (double) (sqrtf(ni)), (double) (sqrtf(no)));
 +
 +    if (!isfinite(no) || cosv/sqrtf(ni*no) < 0.95f) return 1;
 +
@@ -2603,11 +2604,11 @@ index 000000000..aaaa4450f
 +    dequantize_row_turbo4_0(buf, output, d);
 +    turbo_cpu_fwht_inverse(output, d);
 +    printf("Test 3 (turbo4): cos*5\n");
-+    printf("  In:  [%.4f, %.4f, %.4f, %.4f]\n", input[0], input[1], input[2], input[3]);
-+    printf("  Out: [%.4f, %.4f, %.4f, %.4f]\n", output[0], output[1], output[2], output[3]);
++    printf("  In:  [%.4f, %.4f, %.4f, %.4f]\n", (double) (input[0]), (double) (input[1]), (double) (input[2]), (double) (input[3]));
++    printf("  Out: [%.4f, %.4f, %.4f, %.4f]\n", (double) (output[0]), (double) (output[1]), (double) (output[2]), (double) (output[3]));
 +    mse = cosv = ni = no = 0;
 +    for (int i = 0; i < d; i++) { mse += (input[i]-output[i])*(input[i]-output[i]); cosv += input[i]*output[i]; ni += input[i]*input[i]; no += output[i]*output[i]; }
-+    printf("  MSE=%.8f Cosine=%.6f\n\n", mse/d, cosv/sqrtf(ni)/sqrtf(no));
++    printf("  MSE=%.8f Cosine=%.6f\n\n", (double) (mse/d), (double) (cosv/sqrtf(ni)/sqrtf(no)));
 +
 +    if (!isfinite(no) || cosv/sqrtf(ni*no) < 0.98f) return 1;
 +    ggml_free(ctx);
