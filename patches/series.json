@@ -15,6 +15,10 @@
     {
       "name": "moe_expert_cache",
       "description": "Optional device-resident MoE expert slice cache (--moe-expert-cache MiB)"
+    },
+    {
+      "name": "hauhaucs_fastmtp",
+      "description": "HauhauCS FastMTP: Qwen3.5 MTP draft-vocabulary trimming with d2t logits mapping"
     }
   ]
 }
