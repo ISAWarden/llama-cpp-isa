@@ -51,7 +51,7 @@ For Vulkan, add `-DGGML_VULKAN=ON` when configuring CMake. The selector does not
 
 | `hauhaucs_fastmtp` | HauhauCS FastMTP: Qwen3.5 MTP draft-vocabulary trimming and full-vocabulary logits mapping | `./configure.py --enable hauhaucs_fastmtp`; requires an MTP-only model with `d2t` and trimmed `output.weight` |
 
-TurboQuant provides experimental CPU reference implementations and Vulkan acceleration for turbo4/turbo4. Turbo2, turbo3, and TQ weights use CPU implementations. Unsupported operations may fall back to CPU. Check startup logs for the actual placement and backend.
+TurboQuant provides experimental CPU reference implementations and Vulkan acceleration for turbo4/turbo4. Turbo2, turbo3, and TQ weights use CPU implementations. When a device cannot write the requested TurboQuant cache types (including Metal), that layer's K/V cache is allocated on CPU so cache writes can execute there. TurboQuant attention on Metal also uses CPU; this can reduce performance compared with Metal-supported cache formats such as `-ctk q8_0 -ctv q8_0`. Other model operations can still use Metal. Check startup logs for the actual placement and backend.
 
 The MoE cache helps only workloads that transfer CPU-resident expert weights to a device. It needs additional device memory and is not a substitute for full expert offload. It falls back to host transfers if a cache allocation or copy cannot be used. Performance and long-context model quality require workload-specific evaluation.
 
