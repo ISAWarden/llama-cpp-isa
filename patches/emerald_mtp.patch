@@ -108,10 +108,10 @@ index 63d0badd0f7465b804b62128b64c5cc8dd115862..c8881990a68f567bca17d5c21607e594
      common_params_speculative_ngram_map ngram_map_k4v;
 diff --git a/common/emerald-mtp.cpp b/common/emerald-mtp.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..4ae7c2513f868149e2ca77af68c6e870da07ed1e
+index 0000000000000000000000000000000000000000..007ec18e30a5645f7dc1d12a4b60404925e94fb8
 --- /dev/null
 +++ b/common/emerald-mtp.cpp
-@@ -0,0 +1,584 @@
+@@ -0,0 +1,587 @@
 +#include "emerald-mtp.h"
 +#include "gguf.h"
 +#include <algorithm>
@@ -127,6 +127,9 @@ index 0000000000000000000000000000000000000000..4ae7c2513f868149e2ca77af68c6e870
 +#include <stdexcept>
 +#include <thread>
 +#ifdef _WIN32
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
 +#include <windows.h>
 +#else
 +#include <fcntl.h>
