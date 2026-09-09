@@ -1,0 +1,2172 @@
+diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
+index 36f1e0cd50f1b34b37df73eae9b13ce6ce244b87..c0662f92e238054dbeda4772dcffbea52f2f124b 100644
+--- a/common/CMakeLists.txt
++++ b/common/CMakeLists.txt
+@@ -100,6 +100,8 @@ add_library(${TARGET}
+     reasoning-budget.h
+     sampling.cpp
+     sampling.h
++    emerald-mtp.cpp
++    emerald-mtp.h
+     speculative.cpp
+     speculative.h
+     subproc.cpp
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 015196ca1477182f4ebfceed2634609937e7143d..1b914ffb6f8cbb9a1665f5beb438caa12d86f5f2 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -1,4 +1,5 @@
+ #include "arg.h"
++#include "emerald-mtp.h"
+ 
+ #include "build-info.h"
+ #include "chat.h"
+@@ -888,6 +889,14 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
+     // parse all CLI args now, so that -hf is available below for remote preset resolution
+     parse_cli_args();
+ 
++    // Validate required options before model resolution, loading, or context allocation.
++    if (!params.usage && !params.completion &&
++        std::find(params.speculative.types.begin(), params.speculative.types.end(),
++                  COMMON_SPECULATIVE_TYPE_EMERALD_MTP) != params.speculative.types.end() &&
++        params.speculative.emerald.file.empty()) {
++        throw std::invalid_argument("--spec-type emerald-mtp requires --spec-emerald-mtp-file PATH");
++    }
++
+     postprocess_cpu_params(params.cpuparams,       nullptr);
+     postprocess_cpu_params(params.cpuparams_batch, &params.cpuparams);
+ 
+@@ -4273,6 +4282,35 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.speculative.types.insert(params.speculative.types.end(), types.begin(), types.end());
+         }
+     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
++    add_opt(common_arg(
++        {"--spec-emerald-mtp-n-min"}, "N", "EmeraldMTP n-min (default: 8)",
++        [](common_params & p, int v) {
++            if (v < 1 || v > 1024) { throw std::invalid_argument("EmeraldMTP lengths must be 1..1024"); }
++            p.speculative.emerald.n_min = v;
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--spec-emerald-mtp-n-max"}, "N", "EmeraldMTP n-max (default: 16)",
++        [](common_params & p, int v) {
++            if (v < 1 || v > 1024) { throw std::invalid_argument("EmeraldMTP lengths must be 1..1024"); }
++            p.speculative.emerald.n_max = v;
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--spec-emerald-mtp-n-match"}, "N", "EmeraldMTP n-match (default: 24)",
++        [](common_params & p, int v) {
++            if (v < 1 || v > 1024) { throw std::invalid_argument("EmeraldMTP lengths must be 1..1024"); }
++            p.speculative.emerald.n_match = v;
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--spec-emerald-mtp-file"}, "PATH", "EmeraldMTP database (created if missing; path required for emerald-mtp)",
++        [](common_params & p, const std::string & v) { p.speculative.emerald.file = v; }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--spec-emerald-mtp-max-size-gb"}, "GB", "EmeraldMTP compacted size limit in decimal GB (default: 0, unlimited)",
++        [](common_params & p, const std::string & v) { p.speculative.emerald.max_bytes = emerald_size_limit(v); }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
+     add_opt(common_arg(
+         {"--spec-ngram-mod-n-min"}, "N",
+         string_format("minimum number of ngram tokens to use for ngram-based speculative decoding (default: %d)", params.speculative.ngram_mod.n_min),
+diff --git a/common/common.h b/common/common.h
+index 63d0badd0f7465b804b62128b64c5cc8dd115862..c8881990a68f567bca17d5c21607e59444588051 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -180,6 +180,7 @@ enum common_speculative_type {
+     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
+     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
+     COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
++    COMMON_SPECULATIVE_TYPE_EMERALD_MTP,
+     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
+ };
+ 
+@@ -367,6 +368,13 @@ struct common_params_speculative_ngram_cache {
+     std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding
+ };
+ 
++struct common_params_speculative_emerald {
++    int n_min = 8, n_max = 16, n_match = 0; // zero infers the stored lookup length
++    uint64_t max_bytes = 0;
++    int32_t vocab_size = INT32_MAX;
++    std::string file, model;
++};
++
+ struct common_params_speculative {
+     std::vector<enum common_speculative_type> types = { COMMON_SPECULATIVE_TYPE_NONE };
+ 
+@@ -377,6 +385,7 @@ struct common_params_speculative {
+     common_params_speculative_draft draft;
+ 
+     common_params_speculative_ngram_mod ngram_mod;
++    common_params_speculative_emerald emerald;
+     common_params_speculative_ngram_map ngram_simple;
+     common_params_speculative_ngram_map ngram_map_k;
+     common_params_speculative_ngram_map ngram_map_k4v;
+diff --git a/common/emerald-mtp.cpp b/common/emerald-mtp.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..4ae7c2513f868149e2ca77af68c6e870da07ed1e
+--- /dev/null
++++ b/common/emerald-mtp.cpp
+@@ -0,0 +1,584 @@
++#include "emerald-mtp.h"
++#include "gguf.h"
++#include <algorithm>
++#include <chrono>
++#include <cmath>
++#include <condition_variable>
++#include <cstdio>
++#include <cstring>
++#include <filesystem>
++#include <fstream>
++#include <limits>
++#include <mutex>
++#include <stdexcept>
++#include <thread>
++#ifdef _WIN32
++#include <windows.h>
++#else
++#include <fcntl.h>
++#include <sys/file.h>
++#include <unistd.h>
++#endif
++
++namespace {
++using bytes = std::vector<uint8_t>;
++constexpr uint64_t empty = UINT64_MAX;
++uint64_t hash(const uint8_t * p, size_t n) {
++    uint64_t h = 14695981039346656037ULL;
++    for (size_t i = 0; i < n; ++i) { h = (h ^ p[i]) * 1099511628211ULL; }
++    return h;
++}
++void put(bytes & b, uint64_t v, int n = 8) { for (int i = 0; i < n; ++i) { b.push_back(uint8_t(v >> (8*i))); } }
++struct reader {
++    const bytes & b; size_t pos = 0;
++    uint64_t get(int n = 8) {
++        if (size_t(n) > b.size() - pos) { throw std::runtime_error("truncated EmeraldMTP data"); }
++        uint64_t v = 0; for (int i = 0; i < n; ++i) { v |= uint64_t(b[pos++]) << (8*i); } return v;
++    }
++};
++struct writer_lock {
++#ifdef _WIN32
++    HANDLE fd = INVALID_HANDLE_VALUE;
++    explicit writer_lock(const std::string & path) {
++        fd = CreateFileW(std::filesystem::path(path + ".lock").c_str(), GENERIC_READ | GENERIC_WRITE, 0,
++                         nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
++        if (fd == INVALID_HANDLE_VALUE) { throw std::runtime_error("EmeraldMTP database writer is locked"); }
++    }
++    ~writer_lock() { CloseHandle(fd); }
++#else
++    int fd;
++    explicit writer_lock(const std::string & path) {
++        fd = open((path + ".lock").c_str(), O_CREAT | O_RDWR, 0600);
++        if (fd < 0) { throw std::runtime_error("cannot open EmeraldMTP writer lock"); }
++        if (flock(fd, LOCK_EX | LOCK_NB)) { close(fd); throw std::runtime_error("EmeraldMTP database writer is locked"); }
++    }
++    ~writer_lock() { close(fd); }
++#endif
++};
++void sync_file(const std::string & path) {
++#ifdef _WIN32
++    HANDLE f = CreateFileW(std::filesystem::path(path).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
++    if (f == INVALID_HANDLE_VALUE) { throw std::runtime_error("EmeraldMTP sync open failed"); }
++    bool ok = FlushFileBuffers(f); CloseHandle(f);
++#else
++    int f = open(path.c_str(), O_RDONLY);
++    if (f < 0) { throw std::runtime_error("EmeraldMTP sync open failed"); }
++    bool ok = fsync(f) == 0; close(f);
++#endif
++    if (!ok) { throw std::runtime_error("EmeraldMTP sync failed"); }
++}
++constexpr uint64_t frame_magic = 0x3130485041524745ULL; // "EGRAPH01"
++constexpr uint64_t frame_header = 64;
++uint64_t aligned(uint64_t v) {
++    if (v > UINT64_MAX - 63) { throw std::runtime_error("EmeraldMTP size overflow"); }
++    return (v + 63) & ~uint64_t(63);
++}
++void write_frame(std::ostream & out, uint32_t kind, const bytes & b) {
++    bytes h; put(h, frame_magic); put(h, kind, 4); put(h, 0, 4);
++    put(h, b.size()); put(h, hash(b.data(), b.size())); h.resize(frame_header);
++    out.write((const char *) h.data(), h.size()); out.write((const char *) b.data(), b.size());
++    if (!out) { throw std::runtime_error("EmeraldMTP write failed"); }
++}
++}
++
++uint64_t emerald_size_limit(const std::string & gb) {
++    size_t end; double d = std::stod(gb, &end);
++    if (end != gb.size() || !std::isfinite(d) || d < 0 || d * 1e9 >= double(UINT64_MAX)) {
++        throw std::invalid_argument("invalid EmeraldMTP size in decimal GB");
++    }
++    if (d > 0 && d * 1e9 < 1) { throw std::invalid_argument("EmeraldMTP size limit is less than one byte"); }
++    return uint64_t(d * 1e9);
++}
++std::string emerald_tokenizer_fingerprint(const std::string & model) {
++    gguf_init_params params = {true, nullptr};
++    auto * src = gguf_init_from_file(model.c_str(), params);
++    if (!src) { throw std::runtime_error("cannot read tokenizer GGUF"); }
++    auto * dst = gguf_init_empty(); gguf_set_kv(dst, src); gguf_free(src);
++    for (int64_t i = gguf_get_n_kv(dst); i-- > 0;) {
++        std::string key = gguf_get_key(dst, i);
++        if (key.compare(0, 10, "tokenizer.") != 0) { gguf_remove_key(dst, key.c_str()); }
++    }
++    if (!gguf_get_n_kv(dst)) { gguf_free(dst); throw std::runtime_error("GGUF has no tokenizer"); }
++    bytes b(gguf_get_meta_size(dst)); gguf_get_meta_data(dst, b.data()); gguf_free(dst);
++    // Retain the full canonical tokenizer metadata: equality is collision-free.
++    return std::string((const char *) b.data(), b.size());
++}
++
++namespace {
++// Hot nodes contain only the key location and the next drafting step. Counts and
++// alternative continuations are accessed by writers, not successful graph walks.
++struct emerald_graph {
++    struct entry { uint64_t offset, imported, learned, seen, next; };
++    struct node { uint64_t offset, successor; llama_token token; };
++    struct metadata { uint64_t first, best, miss_generation; };
++    uint32_t n;
++    uint64_t clock = 0;
++    std::vector<llama_token> tokens;
++    std::vector<entry> entries;
++    std::vector<node> nodes;
++    std::vector<metadata> meta;
++    std::vector<uint64_t> table;
++    std::vector<uint8_t> tags;
++    explicit emerald_graph(uint32_t n = 24) : n(n), table(16, empty), tags(16) {}
++    uint64_t key_hash(const llama_token * t) const {
++        // Token-wise mixing; serialized indices use this exact unsigned arithmetic.
++        uint64_t h = 0x9e3779b97f4a7c15ULL;
++        for (uint32_t i = 0; i < n; ++i) {
++            h ^= uint32_t(t[i]) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++        }
++        h ^= h >> 30; h *= 0xbf58476d1ce4e5b9ULL;
++        h ^= h >> 27; h *= 0x94d049bb133111ebULL;
++        return h ^ (h >> 31);
++    }
++    uint64_t find(const llama_token * key) const {
++        auto h = key_hash(key); size_t b = h & (table.size()-1);
++        for (size_t probes = 0; probes < table.size(); ++probes, b = (b+1) & (table.size()-1)) {
++            auto id = table[b];
++            if (id == empty) { return empty; }
++            if (tags[b] == uint8_t(h >> 56) && std::equal(key, key+n, tokens.data()+nodes[id].offset)) { return id; }
++        }
++        throw std::runtime_error("invalid EmeraldMTP full index");
++    }
++    void index_node(uint64_t id) {
++        auto h = key_hash(tokens.data()+nodes[id].offset); size_t b = h & (table.size()-1);
++        while (table[b] != empty) { b = (b+1) & (table.size()-1); }
++        table[b] = id; tags[b] = uint8_t(h >> 56);
++    }
++    void grow() {
++        if (nodes.size()*2 <= table.size()) { return; }
++        table.assign(table.size()*2, empty); tags.assign(table.size(), 0);
++        for (size_t i = 0; i < nodes.size(); ++i) { index_node(i); }
++    }
++    static uint64_t score(const entry & e) {
++        return e.imported > UINT64_MAX-e.learned ? UINT64_MAX : e.imported+e.learned;
++    }
++    void consider(uint64_t id, uint64_t edge) {
++        auto & m = meta[id]; auto & v = nodes[id]; const auto & e = entries[edge];
++        auto token = tokens[e.offset+n];
++        if (m.best == empty || score(e) > score(entries[m.best]) ||
++                (score(e) == score(entries[m.best]) && token < v.token)) {
++            m.best = edge;
++            if (v.token != token) { v.token = token; v.successor = empty; m.miss_generation = empty; }
++        }
++    }
++    uint64_t successor(uint64_t id) {
++        auto & v = nodes[id]; auto & m = meta[id];
++        if (v.successor == empty && m.miss_generation != nodes.size()) {
++            // A cached miss is retried only after insertion of a new context.
++            v.successor = find(tokens.data()+entries[m.best].offset+1);
++            m.miss_generation = nodes.size();
++        }
++        return v.successor;
++    }
++    void reindex() {
++        nodes.clear(); meta.clear(); table.assign(16, empty); tags.assign(16, 0);
++        for (size_t i = 0; i < entries.size(); ++i) {
++            auto & e = entries[i]; auto id = find(tokens.data()+e.offset);
++            if (id == empty) {
++                id = nodes.size(); nodes.push_back({e.offset, empty, -1}); meta.push_back({empty, empty, empty});
++                if (nodes.size()*2 > table.size()) { grow(); } else { index_node(id); }
++            }
++            e.next = meta[id].first; meta[id].first = i; consider(id, i);
++        }
++        for (size_t i = 0; i < nodes.size(); ++i) { successor(i); }
++    }
++    uint64_t size(uint64_t fp) const {
++        uint64_t end = aligned(128+fp);
++        end = aligned(end+tokens.size()*4ULL);
++        end = aligned(end+nodes.size()*32ULL);
++        end = aligned(end+entries.size()*32ULL);
++        end = aligned(end+table.size()*8ULL);
++        return frame_header + aligned(end+tags.size());
++    }
++    void pack() {
++        // Reclaim unused token ranges while preserving shared windows in surviving sequences.
++        std::vector<std::pair<uint64_t, uint64_t>> ranges;
++        for (const auto & e : entries) { ranges.emplace_back(e.offset, e.offset+n+1); }
++        std::sort(ranges.begin(), ranges.end());
++        std::vector<std::pair<uint64_t, uint64_t>> merged;
++        for (auto r : ranges) {
++            if (!merged.empty() && r.first <= merged.back().second) { merged.back().second = std::max(merged.back().second, r.second); }
++            else { merged.push_back(r); }
++        }
++        std::vector<uint64_t> starts; std::vector<llama_token> compact;
++        for (auto r : merged) { starts.push_back(compact.size()); compact.insert(compact.end(), tokens.begin()+r.first, tokens.begin()+r.second); }
++        for (auto & e : entries) {
++            auto it = std::upper_bound(merged.begin(), merged.end(), std::make_pair(e.offset, UINT64_MAX)); --it;
++            e.offset = starts[it-merged.begin()] + e.offset-it->first;
++        }
++        tokens.swap(compact); reindex();
++    }
++    bool retain(bool imported, uint64_t limit, uint64_t fp, bool * changed = nullptr) {
++        if (!limit || size(fp) <= limit) { return true; }
++        pack();
++        if (size(fp) <= limit) { return true; }
++        while (size(fp) > limit) {
++            std::vector<size_t> order;
++            for (size_t i = 0; i < entries.size(); ++i) { if (entries[i].learned) { order.push_back(i); } }
++            if (order.empty()) {
++                if (imported) { throw std::runtime_error("protected imported data exceeds EmeraldMTP size limit"); }
++                return false;
++            }
++            std::stable_sort(order.begin(), order.end(), [this](size_t a, size_t b) { return entries[a].seen < entries[b].seen; });
++            // Delete a batch using an upper bound on reclaimed bytes, then measure packed size.
++            // This avoids deleting a newer entry when removing an older one already suffices.
++            const uint64_t row_max = 80 + 4ULL*(n+1) + 6*63 + table.size()*9ULL;
++            uint64_t remaining = (size(fp)-limit + row_max-1)/row_max;
++            for (auto i : order) {
++                if (!remaining) { break; }
++                entries[i].learned = 0;
++                if (changed) { *changed = true; }
++                if (!entries[i].imported) { --remaining; }
++            }
++            entries.erase(std::remove_if(entries.begin(), entries.end(), [](const entry & e) { return !e.imported && !e.learned; }), entries.end());
++            pack();
++        }
++        return true;
++    }
++    void add(const std::vector<llama_token> & seq, bool imported) {
++        if (seq.size() <= n) { return; }
++        size_t range_start = 0, range_end = 0; uint64_t range_base = 0; bool have_range = false;
++        for (size_t i = 0; i+n < seq.size(); ++i) {
++            auto id = find(seq.data()+i); uint64_t found = empty;
++            if (id != empty) {
++                for (auto j = meta[id].first; j != empty; j = entries[j].next) {
++                    if (tokens[entries[j].offset+n] == seq[i+n]) { found = j; break; }
++                }
++            }
++            if (found == empty) {
++                // Keep only new fragments, sharing overlapping windows. This also
++                // bounds live token storage while a captured snapshot is packed.
++                if (!have_range || i > range_end) {
++                    range_start = range_end = i; range_base = tokens.size(); have_range = true;
++                    if (tokens.size() >= n && std::equal(seq.begin()+i, seq.begin()+i+n, tokens.end()-n)) {
++                        range_base -= n; range_end += n;
++                    }
++                }
++                tokens.insert(tokens.end(), seq.begin()+range_end, seq.begin()+i+n+1); range_end = i+n+1;
++                const uint64_t offset = range_base+i-range_start;
++                if (id == empty) {
++                    id = nodes.size(); nodes.push_back({offset, empty, -1}); meta.push_back({empty, empty, empty});
++                    if (nodes.size()*2 > table.size()) { grow(); } else { index_node(id); }
++                }
++                found = entries.size(); entries.push_back({offset, 0, 0, 0, meta[id].first}); meta[id].first = found;
++            }
++            auto & e = entries[found]; auto & count = imported ? e.imported : e.learned;
++            if (count == UINT64_MAX || clock == UINT64_MAX) { throw std::runtime_error("EmeraldMTP counter overflow"); }
++            ++count; e.seen = ++clock; consider(id, found);
++        }
++    }
++    bytes snapshot(const std::string & fingerprint) {
++        pack();
++        // Group continuation IDs only; avoid another full copy of entry records.
++        std::vector<uint64_t> grouped; grouped.reserve(entries.size());
++        const uint64_t fp_at = 128, tok_at = aligned(fp_at+fingerprint.size());
++        const uint64_t node_at = aligned(tok_at+tokens.size()*4ULL), edge_at = aligned(node_at+nodes.size()*32ULL);
++        const uint64_t index_at = aligned(edge_at+entries.size()*32ULL), tag_at = aligned(index_at+table.size()*8ULL);
++        const uint64_t end = aligned(tag_at+tags.size());
++        bytes b; b.reserve(end);
++        put(b, n, 4); put(b, 0, 4); put(b, clock); put(b, fingerprint.size());
++        put(b, tokens.size()); put(b, nodes.size()); put(b, entries.size()); put(b, table.size());
++        for (auto v : {fp_at, tok_at, node_at, edge_at, index_at, tag_at, end}) { put(b, v); }
++        b.resize(fp_at); b.insert(b.end(), fingerprint.begin(), fingerprint.end()); b.resize(tok_at);
++        for (auto t : tokens) { put(b, uint32_t(t), 4); }
++        b.resize(node_at);
++        for (size_t i = 0; i < nodes.size(); ++i) {
++            std::vector<uint64_t> ids;
++            for (auto j = meta[i].first; j != empty; j = entries[j].next) { ids.push_back(j); }
++            std::sort(ids.begin(), ids.end());
++            put(b, nodes[i].offset); put(b, grouped.size()); put(b, nodes[i].successor);
++            put(b, ids.size(), 4); put(b, uint32_t(nodes[i].token), 4);
++            grouped.insert(grouped.end(), ids.begin(), ids.end());
++        }
++        b.resize(edge_at);
++        for (auto id : grouped) {
++            const auto & e = entries[id]; put(b, e.offset); put(b, e.imported); put(b, e.learned); put(b, e.seen);
++        }
++        b.resize(index_at); for (auto id : table) { put(b, id); }
++        b.resize(tag_at); b.insert(b.end(), tags.begin(), tags.end()); b.resize(end);
++        return b;
++    }
++    void load_snapshot(const bytes & b, const std::string & fingerprint, uint32_t requested, int32_t vocab_size) {
++        reader r{b}; n = r.get(4);
++        if (!n || n > 1024 || (requested && requested != n)) { throw std::runtime_error("EmeraldMTP lookup length mismatch"); }
++        if (r.get(4)) { throw std::runtime_error("invalid EmeraldMTP flags"); }
++        clock = r.get(); auto fp = r.get(), nt = r.get(), nn = r.get(), ne = r.get(), cap = r.get();
++        const uint64_t widths[] = {1, 4, 32, 32, 8, 1};
++        const uint64_t lengths[] = {fp, nt, nn, ne, cap, cap};
++        uint64_t offsets[6]; uint64_t end = 128;
++        for (size_t i = 0; i < 6; ++i) {
++            offsets[i] = r.get();
++            if (offsets[i] != end || end > b.size() || lengths[i] > (b.size()-end)/widths[i]) {
++                throw std::runtime_error("invalid EmeraldMTP sections");
++            }
++            end = aligned(end + lengths[i]*widths[i]);
++        }
++        if (r.get() != end || end != b.size() || r.get() || r.get() || cap < 16 || (cap & (cap-1)) || nn > cap/2 || nn > ne) {
++            throw std::runtime_error("invalid EmeraldMTP graph header");
++        }
++        if (fp != fingerprint.size() || std::memcmp(b.data()+offsets[0], fingerprint.data(), fp)) {
++            throw std::runtime_error("EmeraldMTP tokenizer mismatch");
++        }
++        for (size_t i = 0; i < 6; ++i) {
++            const auto from = offsets[i]+lengths[i]*widths[i];
++            const auto to = i == 5 ? end : offsets[i+1];
++            for (auto j = from; j < to; ++j) { if (b[j]) { throw std::runtime_error("invalid EmeraldMTP padding"); } }
++        }
++        r.pos = offsets[1]; tokens.reserve(nt);
++        for (uint64_t i = 0; i < nt; ++i) {
++            auto t = r.get(4); if (t >= uint64_t(vocab_size)) { throw std::runtime_error("invalid EmeraldMTP token"); }
++            tokens.push_back(t);
++        }
++        r.pos = offsets[2]; std::vector<uint64_t> counts; uint64_t consumed = 0;
++        for (uint64_t i = 0; i < nn; ++i) {
++            auto offset = r.get(), first = r.get(), next = r.get();
++            auto count = r.get(4), token = r.get(4);
++            if (nt < n || offset > nt-n || first != consumed || !count || count > ne-consumed ||
++                (next != empty && next >= nn) || token >= uint64_t(vocab_size)) {
++                throw std::runtime_error("invalid EmeraldMTP node");
++            }
++            nodes.push_back({offset, next, llama_token(token)}); meta.push_back({first, empty, nn}); counts.push_back(count);
++            consumed += count;
++        }
++        if (consumed != ne) { throw std::runtime_error("unowned EmeraldMTP continuations"); }
++        r.pos = offsets[3]; entries.reserve(ne);
++        for (uint64_t i = 0; i < ne; ++i) {
++            entry e{r.get(), r.get(), r.get(), r.get(), empty};
++            if (nt <= n || e.offset >= nt-n || (!e.imported && !e.learned) || !e.seen || e.seen > clock) {
++                throw std::runtime_error("invalid EmeraldMTP continuation");
++            }
++            entries.push_back(e);
++        }
++        r.pos = offsets[4]; table.clear(); tags.assign(b.begin()+offsets[5], b.begin()+offsets[5]+cap);
++        std::vector<bool> indexed(nn);
++        for (uint64_t i = 0; i < cap; ++i) {
++            auto id = r.get();
++            if (id != empty) {
++                if (id >= nn || indexed[id] || tags[i] != uint8_t(key_hash(tokens.data()+nodes[id].offset) >> 56)) {
++                    throw std::runtime_error("invalid EmeraldMTP index");
++                }
++                indexed[id] = true;
++            } else if (tags[i]) { throw std::runtime_error("invalid EmeraldMTP empty index tag"); }
++            table.push_back(id);
++        }
++        for (uint64_t i = 0; i < nn; ++i) {
++            if (!indexed[i] || find(tokens.data()+nodes[i].offset) != i) { throw std::runtime_error("invalid EmeraldMTP context index"); }
++            auto & m = meta[i]; auto & v = nodes[i]; auto stored_next = v.successor; auto stored_token = v.token;
++            m.best = empty; v.token = -1; std::vector<llama_token> alternatives;
++            for (auto j = m.first; j < m.first+counts[i]; ++j) {
++                auto & e = entries[j];
++                if (!std::equal(tokens.data()+v.offset, tokens.data()+v.offset+n, tokens.data()+e.offset)) {
++                    throw std::runtime_error("EmeraldMTP continuation context mismatch");
++                }
++                e.next = j+1 < m.first+counts[i] ? j+1 : empty;
++                alternatives.push_back(tokens[e.offset+n]); consider(i, j);
++            }
++            std::sort(alternatives.begin(), alternatives.end());
++            if (std::adjacent_find(alternatives.begin(), alternatives.end()) != alternatives.end()) {
++                throw std::runtime_error("duplicate EmeraldMTP continuation");
++            }
++            // consider() invalidates the cached link; validate and restore the serialized link.
++            if (v.token != stored_token || find(tokens.data()+entries[m.best].offset+1) != stored_next) {
++                throw std::runtime_error("invalid EmeraldMTP cached transition");
++            }
++            v.successor = stored_next; m.miss_generation = nn;
++        }
++    }
++};
++}
++
++struct emerald_database::impl {
++    writer_lock lock;
++    std::string path, fingerprint;
++    emerald_graph graph;
++    int32_t vocab_size;
++    uint64_t limit, disk_bytes = 0;
++    bytes pending;
++    bool background, needs_snapshot = false, dirty = false, failed = false, stop = false, learning_paused = false;
++    mutable std::mutex mutex;
++    // Lock order: persistence then mutex. Readers/writers never acquire persistence.
++    std::mutex persistence;
++    std::condition_variable cv;
++    std::thread worker;
++    impl(const std::string & path, const std::string & fp, uint32_t n, uint64_t limit, int32_t vocab, bool background) :
++        lock(path), path(path), fingerprint(fp), graph(n), vocab_size(vocab), limit(limit), background(background) {}
++    void add(const std::vector<llama_token> & seq, bool imported, bool journal) {
++        if (seq.size() <= graph.n) { return; }
++        for (auto t : seq) { if (t < 0 || t >= vocab_size) { throw std::runtime_error("EmeraldMTP token out of vocabulary"); } }
++        graph.add(seq, imported);
++        if (journal) { put(pending, seq.size()); for (auto t : seq) { put(pending, uint32_t(t), 4); } }
++        dirty = true; needs_snapshot = needs_snapshot || imported;
++        bool retained = false;
++        const bool fits = graph.retain(imported, limit, fingerprint.size(), &retained);
++        // A journal records observations, so retention must be committed as a snapshot.
++        needs_snapshot = needs_snapshot || retained;
++        if (!fits || (!imported && limit &&
++                std::none_of(graph.entries.begin(), graph.entries.end(), [](const emerald_graph::entry & e) { return e.learned != 0; }))) {
++            learning_paused = true;
++            std::fprintf(stderr, "EmeraldMTP learning paused: size limit has no room for learned entries\n");
++        }
++    }
++    void compact(emerald_graph & snapshot) {
++        auto b = snapshot.snapshot(fingerprint); const auto temp = path + ".tmp";
++        { std::ofstream out(temp, std::ios::binary | std::ios::trunc); write_frame(out, 1, b); out.flush(); if (!out) { throw std::runtime_error("EmeraldMTP flush failed"); } }
++        sync_file(temp);
++#ifdef _WIN32
++        if (!MoveFileExW(std::filesystem::path(temp).c_str(), std::filesystem::path(path).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
++            throw std::runtime_error("EmeraldMTP replacement failed");
++        }
++#else
++        std::filesystem::rename(temp, path);
++        auto dir = std::filesystem::path(path).parent_path(); if (dir.empty()) { dir = "."; }
++        sync_file(dir.string());
++#endif
++        disk_bytes = frame_header + b.size();
++    }
++    void flush() {
++        std::lock_guard<std::mutex> io(persistence);
++        try {
++            bytes batch; std::unique_ptr<emerald_graph> snapshot;
++            {
++                std::lock_guard<std::mutex> g(mutex);
++                if (failed || !dirty) { return; }
++                // Bound journal growth independently of the configured snapshot limit.
++                const uint64_t target = graph.size(fingerprint.size());
++                if (needs_snapshot || (disk_bytes > target && disk_bytes-target > target) ||
++                        pending.size() > target || (disk_bytes > target && pending.size() > target-(disk_bytes-target))) {
++                    snapshot.reset(new emerald_graph(graph));
++                }
++                batch.swap(pending); dirty = false; needs_snapshot = false;
++            }
++            // The live graph receives observations immediately while this generation is saved.
++            if (snapshot) { compact(*snapshot); }
++            else if (!batch.empty()) {
++                { std::ofstream out(path, std::ios::binary | std::ios::app); write_frame(out, 2, batch); out.flush(); if (!out) { throw std::runtime_error("EmeraldMTP journal flush failed"); } }
++                sync_file(path); disk_bytes += frame_header + batch.size();
++            }
++        } catch (...) {
++            std::lock_guard<std::mutex> g(mutex); failed = true; throw;
++        }
++    }
++    void load(uint32_t requested) {
++        std::ifstream in(path, std::ios::binary); if (!in) { throw std::runtime_error("EmeraldMTP requires an existing database"); }
++        const uint64_t file_size = std::filesystem::file_size(path); uint64_t valid = 0; bool first = true;
++        while (valid < file_size) {
++            bytes h(frame_header); in.read((char *)h.data(), h.size());
++            if (!in) { if (first) { throw std::runtime_error("missing EmeraldMTP snapshot"); } break; }
++            reader hr{h};
++            if (hr.get() != frame_magic) { throw std::runtime_error("invalid EmeraldMTP graph signature"); }
++            auto kind = hr.get(4);
++            if (hr.get(4) || (first ? kind != 1 : kind != 2)) { throw std::runtime_error("invalid EmeraldMTP frame kind"); }
++            auto len = hr.get(), checksum = hr.get();
++            while (hr.pos < h.size()) { if (hr.get()) { throw std::runtime_error("invalid EmeraldMTP frame padding"); } }
++            if (len > file_size-valid-frame_header) { if (first) { throw std::runtime_error("truncated EmeraldMTP snapshot"); } break; }
++            if (len > std::numeric_limits<size_t>::max() || len > uint64_t(std::numeric_limits<std::streamsize>::max())) {
++                throw std::runtime_error("EmeraldMTP transaction exceeds platform address limits");
++            }
++            bytes b(static_cast<size_t>(len)); in.read((char *)b.data(), len);
++            if (!in || hash(b.data(), b.size()) != checksum) { throw std::runtime_error("EmeraldMTP checksum mismatch"); }
++            if (first) { graph.load_snapshot(b, fingerprint, requested, vocab_size); first = false; }
++            else {
++                reader r{b};
++                while (r.pos < b.size()) {
++                    auto count = r.get(); if (count > (b.size()-r.pos)/4) { throw std::runtime_error("invalid EmeraldMTP journal length"); }
++                    std::vector<llama_token> seq; seq.reserve(count);
++                    for (uint64_t i = 0; i < count; ++i) { auto t = r.get(4); if (t >= uint64_t(vocab_size)) { throw std::runtime_error("invalid EmeraldMTP token"); } seq.push_back(t); }
++                    add(seq, false, false);
++                }
++            }
++            valid += frame_header+len;
++        }
++        if (first) { throw std::runtime_error("empty EmeraldMTP database"); }
++        in.close(); if (valid != file_size) { std::filesystem::resize_file(path, valid); }
++        bool retained = false; graph.retain(true, limit, fingerprint.size(), &retained);
++        needs_snapshot = needs_snapshot || retained || (limit && valid > limit);
++        dirty = needs_snapshot; disk_bytes = valid;
++    }
++};
++
++emerald_database::emerald_database(const std::string & path, const std::string & fingerprint, uint32_t n,
++                                 uint64_t max_bytes, bool create, bool background, int32_t vocab_size, bool create_if_missing) :
++        p(new impl(path, fingerprint, n, max_bytes, vocab_size, background)) {
++    const bool missing = create_if_missing && !std::filesystem::exists(path);
++    if (create || missing) {
++        if (std::filesystem::exists(path)) { throw std::runtime_error("output exists; use --append explicitly"); }
++        if (missing && !n) { n = 24; p->graph.n = n; }
++        if (!n || n > 1024) { throw std::runtime_error("n-match must be 1..1024"); }
++        p->graph.retain(true, max_bytes, fingerprint.size()); p->dirty = true; p->needs_snapshot = true;
++        if (missing) { p->flush(); }
++    } else { p->load(n); }
++    if (background) { p->worker = std::thread([this] {
++        std::unique_lock<std::mutex> guard(p->mutex);
++        while (!p->stop) {
++            p->cv.wait_for(guard, std::chrono::seconds(1), [this] { return p->stop; });
++            guard.unlock();
++            try { p->flush(); } catch (const std::exception & e) {
++                std::fprintf(stderr, "EmeraldMTP persistence failed; learning paused: %s\n", e.what());
++            }
++            guard.lock();
++        }
++    }); }
++}
++emerald_database::~emerald_database() {
++    { std::lock_guard<std::mutex> guard(p->mutex); p->stop = true; p->cv.notify_all(); }
++    if (p->worker.joinable()) { p->worker.join(); }
++    try { if (p->background) { flush(); } } catch (const std::exception & e) { std::fprintf(stderr, "EmeraldMTP final flush failed: %s\n", e.what()); }
++}
++uint32_t emerald_database::n_match() const { return p->graph.n; }
++uint64_t emerald_database::size_bytes() const { std::lock_guard<std::mutex> g(p->mutex); return p->graph.size(p->fingerprint.size()); }
++emerald_database_stats emerald_database::statistics(size_t top_k) const {
++    std::lock_guard<std::mutex> g(p->mutex);
++    emerald_database_stats result;
++    result.unique_ngrams = p->graph.entries.size();
++    auto add = [&](uint64_t & total, uint64_t count) {
++        if (count > UINT64_MAX-total) { total = UINT64_MAX; result.counts_saturated = true; }
++        else { total += count; }
++    };
++    // Keep only the requested best entries, without copying the full index.
++    std::vector<size_t> top;
++    auto better = [&](size_t a, size_t b) {
++        const auto & x = p->graph.entries[a]; const auto & y = p->graph.entries[b];
++        const uint64_t xc = x.imported+x.learned, yc = y.imported+y.learned;
++        const bool xo = xc < x.imported, yo = yc < y.imported;
++        if (xo != yo) { return xo; }
++        if (xc != yc) { return xc > yc; }
++        return std::lexicographical_compare(p->graph.tokens.begin()+x.offset, p->graph.tokens.begin()+x.offset+p->graph.n+1,
++                                            p->graph.tokens.begin()+y.offset, p->graph.tokens.begin()+y.offset+p->graph.n+1);
++    };
++    for (size_t i = 0; i < p->graph.entries.size(); ++i) {
++        const auto & e = p->graph.entries[i];
++        if (e.imported) { ++result.imported_ngrams; }
++        add(result.imported, e.imported); add(result.learned, e.learned);
++        if (!top_k) { continue; }
++        auto pos = std::lower_bound(top.begin(), top.end(), i, better);
++        if (top.size() < top_k || pos != top.end()) {
++            top.insert(pos, i);
++            if (top.size() > top_k) { top.pop_back(); }
++        }
++    }
++    for (auto i : top) {
++        const auto & e = p->graph.entries[i];
++        result.top.push_back({std::vector<llama_token>(p->graph.tokens.begin()+e.offset, p->graph.tokens.begin()+e.offset+p->graph.n+1),
++                              e.imported, e.learned});
++    }
++    return result;
++}
++void emerald_database::observe(const std::vector<llama_token> & t, bool imported) {
++    std::lock_guard<std::mutex> g(p->mutex); if (p->failed || (!imported && p->learning_paused)) { return; }
++    p->add(t, imported, !imported);
++}
++void emerald_database::flush() { p->flush(); }
++std::vector<llama_token> emerald_database::draft(const std::vector<llama_token> & context, uint32_t n_min, uint32_t n_max) {
++    std::lock_guard<std::mutex> lock(p->mutex); std::vector<llama_token> out;
++    auto & g = p->graph;
++    if (context.size() < g.n || g.nodes.empty() || !n_max) { return out; }
++    auto id = g.find(context.data()+context.size()-g.n);
++    if (id == empty) { return out; }
++    out.reserve(n_max);
++    while (id != empty && out.size() < n_max) {
++        out.push_back(g.nodes[id].token);
++        if (out.size() < n_max) { id = g.successor(id); }
++    }
++    if (out.size() < n_min) { out.clear(); }
++    return out;
++}
+diff --git a/common/emerald-mtp.h b/common/emerald-mtp.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..7b2d1bcde353afb32d7a03676f7c85f24aa10ba6
+--- /dev/null
++++ b/common/emerald-mtp.h
+@@ -0,0 +1,35 @@
++#pragma once
++#include "llama.h"
++#include <cstdint>
++#include <memory>
++#include <string>
++#include <vector>
++
++// Fingerprint includes every tokenizer.* GGUF key, including merges and special-token settings.
++std::string emerald_tokenizer_fingerprint(const std::string & model);
++uint64_t emerald_size_limit(const std::string & gb);
++struct emerald_ngram_stats {
++    std::vector<llama_token> tokens;
++    uint64_t imported = 0, learned = 0;
++};
++struct emerald_database_stats {
++    uint64_t unique_ngrams = 0, imported_ngrams = 0, imported = 0, learned = 0;
++    bool counts_saturated = false;
++    std::vector<emerald_ngram_stats> top;
++};
++class emerald_database {
++public:
++    emerald_database(const std::string & path, const std::string & fingerprint, uint32_t n_match,
++                     uint64_t max_bytes, bool create, bool background = false, int32_t vocab_size = INT32_MAX,
++                     bool create_if_missing = false);
++    ~emerald_database();
++    uint32_t n_match() const;
++    void observe(const std::vector<llama_token> & tokens, bool imported);
++    std::vector<llama_token> draft(const std::vector<llama_token> & context, uint32_t n_min, uint32_t n_max);
++    void flush();
++    uint64_t size_bytes() const;
++    emerald_database_stats statistics(size_t top_k = 10) const;
++private:
++    struct impl;
++    std::unique_ptr<impl> p;
++};
+diff --git a/common/speculative.cpp b/common/speculative.cpp
+index 851a47b9a584bafd6f2beed011f5a7cde0a94eb3..2c6d289c640b784a808a2e3d994ffeaf8125fe73 100644
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -1,4 +1,5 @@
+ #include "speculative.h"
++#include "emerald-mtp.h"
+ 
+ #include "common.h"
+ #include "ggml.h"
+@@ -31,6 +32,7 @@
+ #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
+ 
+ const std::map<std::string, common_speculative_type> common_speculative_type_from_name_map = {
++    { "emerald-mtp", COMMON_SPECULATIVE_TYPE_EMERALD_MTP },
+     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
+     {"draft-simple",  COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE},
+     {"draft-eagle3",  COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3},
+@@ -163,6 +165,9 @@ struct common_speculative_impl {
+ 
+     virtual ~common_speculative_impl() = default;
+ 
++    virtual void learn_prompt(llama_seq_id, const llama_tokens &) {}
++    virtual void observe(llama_seq_id, llama_token) {}
++    virtual void finalize(llama_seq_id) {}
+     virtual void begin(llama_seq_id seq_id, const llama_tokens & prompt) = 0;
+ 
+     virtual bool process(const llama_batch & batch) = 0;
+@@ -1761,6 +1766,48 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+ };
+ 
+ // state of self-speculation (simple implementation, not ngram-map)
++struct common_speculative_impl_emerald : common_speculative_impl {
++    emerald_database db;
++    int n_min;
++    std::vector<llama_tokens> history;
++    std::vector<bool> active;
++    common_speculative_impl_emerald(const common_params_speculative & p, uint32_t count) :
++        common_speculative_impl(COMMON_SPECULATIVE_TYPE_EMERALD_MTP, count, p.emerald.n_max),
++        db(p.emerald.file, emerald_tokenizer_fingerprint(p.emerald.model), p.emerald.n_match,
++           p.emerald.max_bytes, false, true, p.emerald.vocab_size, true),
++        n_min(p.emerald.n_min), history(count), active(count, false) {}
++    ~common_speculative_impl_emerald() override {
++        SPC_INF("EmeraldMTP lookup: %zu draft calls, %.3f ms total (including lock wait)\n",
++                n_call_draft, t_draft_us / 1000.0);
++    }
++    void begin(llama_seq_id, const llama_tokens &) override {}
++    void learn_prompt(llama_seq_id id, const llama_tokens & prompt) override {
++        active.at(id) = true;
++        db.observe(prompt, false);
++        history.at(id).assign(prompt.end()-std::min(prompt.size(), size_t(db.n_match())), prompt.end());
++    }
++    void observe(llama_seq_id id, llama_token token) override {
++        if (!active.at(id)) { return; }
++        auto & h = history.at(id); h.push_back(token);
++        db.observe(h, false);
++        if (h.size() > db.n_match()) { h.erase(h.begin()); }
++    }
++    void finalize(llama_seq_id id) override { history.at(id).clear(); active.at(id) = false; }
++    bool process(const llama_batch &) override { return true; }
++    void accept(llama_seq_id, uint16_t, bool) override {}
++    void draft(common_speculative_draft_params_vec & params) override {
++        for (auto & dp : params) {
++            if (!dp.drafting) { continue; }
++            llama_tokens context;
++            const auto & prompt = *dp.prompt;
++            const size_t count = std::min(prompt.size(), size_t(db.n_match()-1));
++            context.assign(prompt.end()-count, prompt.end()); context.push_back(dp.id_last);
++            const int limit = dp.n_max < 0 ? n_max : std::min(n_max, dp.n_max);
++            *dp.result = db.draft(context, n_min, limit);
++        }
++    }
++};
++
+ struct common_speculative_impl_ngram_simple : public common_speculative_impl {
+     common_params_speculative_ngram_map params;
+ 
+@@ -2239,6 +2286,7 @@ const char * common_speculative_all_types_str() {
+ 
+ std::string common_speculative_type_to_str(common_speculative_type type) {
+     switch (type) {
++        case COMMON_SPECULATIVE_TYPE_EMERALD_MTP:   return "emerald-mtp";
+         case COMMON_SPECULATIVE_TYPE_NONE:          return "none";
+         case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:  return "draft-simple";
+         case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
+@@ -2347,6 +2395,9 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
+             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V:
+                 n_max = std::max(n_max, (int32_t) spec->ngram_map_k4v.size_m);
+                 break;
++            case COMMON_SPECULATIVE_TYPE_EMERALD_MTP:
++                n_max = std::max(n_max, spec->emerald.n_max);
++                break;
+             case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:
+                 n_max = std::max(n_max, std::max(0, spec->ngram_mod.n_max));
+                 break;
+@@ -2600,6 +2651,12 @@ common_speculative_output_limits common_speculative_get_output_limits(
+ // initialization of the speculative decoding system
+ //
+ common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq) {
++    if (std::find(params.types.begin(), params.types.end(), COMMON_SPECULATIVE_TYPE_EMERALD_MTP) != params.types.end()) {
++        if (params.has_synth()) { throw std::invalid_argument("EmeraldMTP rejects synthetic acceptance"); }
++        if (params.emerald.file.empty() || params.emerald.n_min < 1 || params.emerald.n_max < params.emerald.n_min) {
++            throw std::invalid_argument("EmeraldMTP requires a database and 1 <= n-min <= n-max");
++        }
++    }
+     // Compute the implementations to use based on the config and their order of preference
+     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
+     {
+@@ -2612,10 +2669,11 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+         };
+ 
+         // when adding a new type - update here the logic above
+-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 11);
++        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 12);
+ 
+         // this list here defines the priority of the speculators
+         // the one with highest priority are listed first
++        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_EMERALD_MTP);
+         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
+         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
+         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
+@@ -2635,6 +2693,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+         switch (config.type) {
+             case COMMON_SPECULATIVE_TYPE_NONE:
+                 break;
++            case COMMON_SPECULATIVE_TYPE_EMERALD_MTP:
++                impls.push_back(std::make_unique<common_speculative_impl_emerald>(config.params, n_seq));
++                break;
+             case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE: {
+                 impls.push_back(std::make_unique<common_speculative_impl_draft_simple>(config.params, n_seq));
+                 break;
+@@ -2761,6 +2822,16 @@ common_speculative_draft_params & common_speculative_get_draft_params(
+     return spec->dparams[seq_id];
+ }
+ 
++void common_speculative_learn_prompt(common_speculative * spec, llama_seq_id id, const llama_tokens & prompt) {
++    if (spec) { for (auto & impl : spec->impls) { impl->learn_prompt(id, prompt); } }
++}
++void common_speculative_observe(common_speculative * spec, llama_seq_id id, llama_token token) {
++    if (spec) { for (auto & impl : spec->impls) { impl->observe(id, token); } }
++}
++void common_speculative_finalize(common_speculative * spec, llama_seq_id id) {
++    if (spec) { for (auto & impl : spec->impls) { impl->finalize(id); } }
++}
++
+ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt) {
+     if (spec == nullptr) {
+         return;
+diff --git a/common/speculative.h b/common/speculative.h
+index 22505891f7efac13c45c07227f6f6aacc8f7e672..3490b7d9aa7fb6dbb001771cbdd47737cba5293a 100644
+--- a/common/speculative.h
++++ b/common/speculative.h
+@@ -76,6 +76,11 @@ common_speculative_draft_params & common_speculative_get_draft_params(common_spe
+ // optionally call once at the beginning of a new generation
+ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt);
+ 
++// Server hooks: committed tokens only; never call for decode/replay batches.
++void common_speculative_learn_prompt(common_speculative * spec, llama_seq_id id, const llama_tokens & prompt);
++void common_speculative_observe(common_speculative * spec, llama_seq_id id, llama_token token);
++void common_speculative_finalize(common_speculative * spec, llama_seq_id id);
++
+ // process the batch and update the internal state of the speculative context
+ bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
+ 
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index c46377c7623d4d517318eb15152f8afee96fb3f1..ee30b950be5347eee454c022dbb6101c6d06e426 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -116,6 +116,12 @@ function(llama_build_and_test source)
+     set_property(TEST ${TEST_TARGET} PROPERTY LABELS ${LLAMA_TEST_LABEL})
+ endfunction()
+ 
++llama_build(test-emerald-mtp.cpp)
++target_compile_features(test-emerald-mtp PRIVATE cxx_std_17)
++llama_test(test-emerald-mtp)
++llama_build(test-emerald-mtp-bench.cpp)
++target_compile_features(test-emerald-mtp-bench PRIVATE cxx_std_17)
++
+ # build test-tokenizer-0 target once and add many tests
+ llama_build(test-tokenizer-0.cpp)
+ 
+diff --git a/tests/test-arg-parser.cpp b/tests/test-arg-parser.cpp
+index e0907631abd8a89e5b6dbadf10d28b65ed483b9a..b7533ea6821e6294a453bd25de291a3f441372f4 100644
+--- a/tests/test-arg-parser.cpp
++++ b/tests/test-arg-parser.cpp
+@@ -170,6 +170,21 @@ static void test(void) {
+         return res;
+     };
+ 
++    // EmeraldMTP's required database must be checked by parsing, before loading any model.
++    {
++        auto parse_emerald = [&](std::vector<std::string> args) {
++            common_params value;
++            return common_params_parse(args.size(), list_str_to_char(args).data(), value, LLAMA_EXAMPLE_SERVER);
++        };
++        assert(!parse_emerald({"server", "--spec-type", "emerald-mtp"}));
++        assert(!parse_emerald({"server", "-m", "/nonexistent/model.gguf", "--spec-type", "emerald-mtp"}));
++        assert(!parse_emerald({"server", "--spec-type", "ngram-mod,emerald-mtp"}));
++        assert(!parse_emerald({"server", "--spec-type", "emerald-mtp", "--spec-emerald-mtp-file", ""}));
++        assert(parse_emerald({"server", "--spec-type", "emerald-mtp", "--spec-emerald-mtp-file", "database.bin"}));
++        assert(parse_emerald({"server", "--spec-emerald-mtp-file", "database.bin", "--spec-type", "emerald-mtp"}));
++        assert(parse_emerald({"server", "--spec-type", "ngram-mod"}));
++    }
++
+     std::vector<std::string> argv;
+ 
+     printf("test-arg-parser: test invalid usage\n\n");
+diff --git a/tests/test-emerald-mtp-bench.cpp b/tests/test-emerald-mtp-bench.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..3bbeb40614c155cb46ca392e4ec31917d25b57ae
+--- /dev/null
++++ b/tests/test-emerald-mtp-bench.cpp
+@@ -0,0 +1,61 @@
++#include "emerald-mtp.h"
++#include <algorithm>
++#include <chrono>
++#include <filesystem>
++#include <iostream>
++#include <random>
++#include <stdexcept>
++
++// Opt-in lookup microbenchmark: test-emerald-mtp-bench [corpus_tokens] [queries].
++// Run independently of builds/inference. Synthetic results do not predict acceptance.
++int main(int argc, char ** argv) {
++    using clock = std::chrono::steady_clock;
++    const size_t count = argc > 1 ? std::stoull(argv[1]) : 200000;
++    const size_t queries = argc > 2 ? std::stoull(argv[2]) : 20000;
++    if (count < 64 || !queries) { return 1; }
++    const auto dir = std::filesystem::temp_directory_path() / ("emerald-bench-" + std::to_string(clock::now().time_since_epoch().count()));
++    std::filesystem::create_directory(dir); const auto path = (dir / "graph").string();
++    try {
++        std::mt19937 rng(42); std::vector<llama_token> corpus(count);
++        for (auto & t : corpus) { t = rng()%1000000; }
++        std::vector<llama_token> branch(25, 1000001);
++        auto start = clock::now();
++        {
++            emerald_database db(path, "benchmark-vocabulary", 24, 0, true);
++            db.observe(corpus, true);
++            for (int i = 0; i < 1024; ++i) { branch.back() = 1000002+i; db.observe(branch, true); }
++            auto indexed = clock::now(); db.flush();
++            std::cout << "index_ms=" << std::chrono::duration<double,std::milli>(indexed-start).count()
++                      << " save_ms=" << std::chrono::duration<double,std::milli>(clock::now()-indexed).count()
++                      << " file_bytes=" << std::filesystem::file_size(path) << '\n';
++        }
++        start = clock::now();
++        {
++            emerald_database db(path, "benchmark-vocabulary", 24, 0, false);
++            std::cout << "load_ms=" << std::chrono::duration<double,std::milli>(clock::now()-start).count() << '\n';
++            uint64_t checksum = 0;
++            for (int mode = 0; mode < 3; ++mode) {
++                std::vector<double> ns; ns.reserve(queries);
++                for (size_t i = 0; i < queries+1000; ++i) {
++                    size_t pos = rng()%(count-40);
++                    std::vector<llama_token> key(corpus.begin()+pos, corpus.begin()+pos+24);
++                    if (mode == 1) { key[0] = 2000000; }
++                    if (mode == 2) { key.assign(24, 1000001); }
++                    auto before = clock::now(); auto result = db.draft(key, 1, 16); auto after = clock::now();
++                    if ((mode == 0 && (result.size() != 16 || !std::equal(result.begin(), result.end(), corpus.begin()+pos+24))) ||
++                        (mode == 1 && !result.empty()) || (mode == 2 && result != std::vector<llama_token>{1000002})) {
++                        throw std::runtime_error("unexpected draft");
++                    }
++                    checksum += result.size();
++                    if (i >= 1000) { ns.push_back(std::chrono::duration<double,std::nano>(after-before).count()); }
++                }
++                std::sort(ns.begin(), ns.end());
++                std::cout << (mode == 0 ? "hit16" : mode == 1 ? "miss" : "fanout1024")
++                          << " p50_ns=" << ns[ns.size()/2] << " p95_ns=" << ns[ns.size()*95/100]
++                          << " p99_ns=" << ns[ns.size()*99/100] << '\n';
++            }
++            std::cout << "checked_tokens=" << checksum << '\n';
++        }
++        std::filesystem::remove_all(dir); return 0;
++    } catch (const std::exception & e) { std::cerr << e.what() << " (fixtures: " << dir << ")\n"; return 1; }
++}
+diff --git a/tests/test-emerald-mtp-checkpoint.py b/tests/test-emerald-mtp-checkpoint.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..349c0640b4625e8c5a748dbdbf4a62f928d8b2c4
+--- /dev/null
++++ b/tests/test-emerald-mtp-checkpoint.py
+@@ -0,0 +1,46 @@
++#!/usr/bin/env python3
++"""Real-model checkpoint/replay test; pass a recurrent/hybrid GGUF such as Qwen3.5."""
++import argparse
++import collections
++import pathlib
++import runpy
++import subprocess
++
++helpers = runpy.run_path(str(pathlib.Path(__file__).with_name("test-emerald-mtp-server.py")))
++server, completion, post, learned_counts = (helpers[k] for k in ("server", "completion", "post", "learned_counts"))
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    for name in ("server", "upstream", "importer", "model", "output-dir"):
++        parser.add_argument("--" + name, required=True)
++    args = parser.parse_args()
++    out = pathlib.Path(args.output_dir)
++    out.mkdir(parents=True, exist_ok=True)
++    prompt = "Write a short Python function to compute the factorial of a non-negative integer.\n"
++    with server(args.upstream, args.model, out, "checkpoint-upstream") as port:
++        baseline = completion(port, prompt, n_predict=96)
++        ids = post(port, "tokenize", {"content": prompt, "add_special": True})["tokens"]
++        source = post(port, "detokenize", {"tokens": ids + baseline["tokens"][:20]})["content"]
++    corpus = out / "checkpoint.txt"
++    corpus.write_text(source + " incorrect imported text must be rejected by the target model " * 30)
++    db = out / "checkpoint.bin"
++    with open(out / "checkpoint-import.log", "w") as log:
++        subprocess.run([args.importer, "-m", args.model, "--input", str(corpus), "--output", str(db),
++                        "--n-match", "4"], check=True, stdout=log, stderr=log)
++    with server(args.server, args.model, out, "checkpoint-emerald",
++                ["--spec-type", "emerald-mtp", "--spec-emerald-mtp-file", str(db),
++                 "--spec-emerald-mtp-n-min", "2", "--spec-emerald-mtp-n-max", "8", "--verbosity", "5"]) as port:
++        actual = completion(port, prompt, n_predict=96)
++    assert actual["tokens"] == baseline["tokens"], "greedy output differs after checkpoint replay"
++    assert actual["timings"]["draft_n"] > actual["timings"]["draft_n_accepted"], "no rejected drafts"
++    seq = ids + actual["tokens"]
++    assert learned_counts(db)[1] == collections.Counter(tuple(seq[i:i+5]) for i in range(len(seq)-4))
++    log = (out / "checkpoint-emerald.log").read_text()
++    assert "restor" in log.lower() and "checkpoint" in log.lower(), "checkpoint path not exercised"
++    print("Hybrid/recurrent greedy parity and exact learning counts after rejected-draft checkpoint replay passed")
++    print(actual["timings"])
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/test-emerald-mtp-import.py b/tests/test-emerald-mtp-import.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..4ea60eec445a86953fccdc68a39360a00fd9ca4a
+--- /dev/null
++++ b/tests/test-emerald-mtp-import.py
+@@ -0,0 +1,85 @@
++#!/usr/bin/env python3
++"""Importer filesystem and atomic append checks; requires a local GGUF vocabulary/model."""
++import argparse
++import hashlib
++import pathlib
++import subprocess
++import tempfile
++
++
++def main():
++    p = argparse.ArgumentParser()
++    p.add_argument("--importer", required=True)
++    p.add_argument("--model", required=True)
++    args = p.parse_args()
++    with tempfile.TemporaryDirectory(prefix="emerald-import-test-") as temp:
++        root = pathlib.Path(temp)
++        source = root / "source"
++        source.mkdir()
++        (source / "a.txt").write_bytes(b"one two three four five six seven eight nine ten\n\n  spaces\tand tabs\n")
++        (source / "binary.txt").write_bytes(b"hello\x00world")
++        (source / "invalid.txt").write_bytes(b"\xed\xa0\x80")
++        (source / "ignored.md").write_text("not selected")
++        (source / ".git").mkdir()
++        (source / ".git" / "secret.txt").write_text("not imported")
++        (source / "link.txt").symlink_to(source / "a.txt")
++        db = root / "db.bin"
++        def run(*extra, ok=True):
++            r = subprocess.run([args.importer, "-m", args.model, "--input", str(source),
++                                "--output", str(db), "--include", "**/*.txt", *extra], capture_output=True, text=True, errors="replace", timeout=120)
++            assert (r.returncode == 0) == ok, r.stderr
++            return r.stderr
++        # Parallel tokenization must preserve byte-identical snapshots and append order.
++        parallel_source = root / "parallel"
++        parallel_source.mkdir()
++        for i in range(24):
++            (parallel_source / f"{i:03}.txt").write_text(("one two three four five " + str(i) + "\n") * (i+1))
++        # A file larger than the lookahead budget must run alone without blocking later files.
++        with (parallel_source / "000-large.txt").open("wb") as large:
++            large.truncate(33*1024*1024)
++        outputs = []
++        for workers in (1, 2, 8):
++            output = root / f"parallel-{workers}.bin"
++            command = [args.importer, "-m", args.model, "--input", str(parallel_source),
++                       "--output", str(output), "--n-match", "4", "--threads", str(workers)]
++            subprocess.run(command, capture_output=True, text=True, errors="replace", check=True, timeout=120)
++            initial = output.read_bytes()
++            subprocess.run([*command, "--append"], capture_output=True, text=True, errors="replace", check=True, timeout=120)
++            outputs.append((initial, output.read_bytes()))
++        assert outputs[0] == outputs[1] == outputs[2]
++        run("--threads", "0", ok=False)
++        run("--threads", "257", ok=False)
++        log = run("--n-match", "4")
++        assert "symlink or .git" in log and "binary or invalid UTF-8" in log and ": glob filter" not in log
++        assert "Tokenization/indexing" in log and "Saving" in log
++        assert "Import summary (this run):" in log and "N-grams added:" in log
++        assert "3 selected, 1 imported" in log and "learned=0" in log
++        old = hashlib.sha256(db.read_bytes()).digest()
++        run(ok=False)
++        assert hashlib.sha256(db.read_bytes()).digest() == old
++        run("--append", "--n-match", "5", ok=False)
++        assert hashlib.sha256(db.read_bytes()).digest() == old
++        run("--append", "--max-size-gb", "0.000000001", ok=False)
++        assert hashlib.sha256(db.read_bytes()).digest() == old
++        log = run("--append", "--verbose")
++        assert "skip " + str(source / "ignored.md") + ": glob filter" in log
++        assert "0 new unique imported n-grams" in log
++        assert hashlib.sha256(db.read_bytes()).digest() != old
++        log = run("--append", "--exclude", "**")
++        assert "0 selected, 0 imported" in log and "No files selected" in log
++        assert "N-grams added: 0 occurrences, 0 new unique imported n-grams" in log
++        # A selected file that cannot be opened must fail the entire import, without saving partial counts.
++        old = hashlib.sha256(db.read_bytes()).digest()
++        locked = source / "unreadable.txt"
++        locked.write_text("unreadable")
++        locked.chmod(0)
++        try:
++            run("--append", ok=False)
++            assert hashlib.sha256(db.read_bytes()).digest() == old
++        finally:
++            locked.chmod(0o600)
++    print("Importer traversal, UTF-8, globs, replacement, append, mismatch, size limit and unreadable-file checks passed")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/test-emerald-mtp-server.py b/tests/test-emerald-mtp-server.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8cc0134033143fcb41889d54ce3aba073eb4f603
+--- /dev/null
++++ b/tests/test-emerald-mtp-server.py
+@@ -0,0 +1,267 @@
++#!/usr/bin/env python3
++"""Opt-in real-model regression and benchmark. Uses only Python's standard library.
++
++python3 tests/test-emerald-mtp-server.py --server build/bin/llama-server \
++  --upstream /path/to/pristine/llama-server --importer build/bin/pretrain-emerald-mtp \
++  --model model.gguf --output-dir /tmp/emerald-validation
++"""
++import argparse
++import collections
++import concurrent.futures
++import contextlib
++import json
++import pathlib
++import signal
++import shutil
++import socket
++import struct
++import subprocess
++import time
++import urllib.request
++
++
++def post(port, route, payload):
++    req = urllib.request.Request(f"http://127.0.0.1:{port}/{route}",
++                                 json.dumps(payload).encode(), {"Content-Type": "application/json"})
++    with urllib.request.urlopen(req, timeout=120) as response:
++        return json.load(response)
++
++
++@contextlib.contextmanager
++def server(binary, model, directory, name, extra=(), crash=False):
++    with socket.socket() as s:
++        s.bind(("127.0.0.1", 0))
++        port = s.getsockname()[1]
++    log = open(directory / (name + ".log"), "w")
++    command = [binary, "-m", model, "-t", "4", "-c", "2048", "-np", "2", "-fa", "on",
++               "--host", "127.0.0.1", "--port", str(port), *extra]
++    process = subprocess.Popen(command, stdout=log, stderr=log)
++    try:
++        for _ in range(240):
++            if process.poll() is not None:
++                raise RuntimeError(f"server exited: {directory / (name + '.log')}")
++            try:
++                urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1).close()
++                break
++            except Exception:
++                time.sleep(0.25)
++        else:
++            raise RuntimeError("server readiness timed out")
++        yield port
++    finally:
++        if crash:
++            process.kill()
++        else:
++            process.send_signal(signal.SIGTERM)
++        try:
++            process.wait(timeout=30)
++        except subprocess.TimeoutExpired:
++            process.kill()
++            process.wait()
++        log.close()
++
++
++def completion(port, prompt, **kwargs):
++    body = dict(prompt=prompt, n_predict=96, temperature=0, seed=123, cache_prompt=False,
++                return_tokens=True, ignore_eos=True)
++    body.update(kwargs)
++    start = time.perf_counter()
++    result = post(port, "completion", body)
++    result["wall_seconds"] = time.perf_counter() - start
++    return result
++
++
++def learned_counts(path):
++    """Independent decoder checks persisted counts, including un-compacted journal frames."""
++    data = path.read_bytes()
++    pos = 0
++    learned = collections.Counter()
++    n = None
++    while pos < len(data):
++        magic, kind, flags, length, checksum = struct.unpack_from("<QIIQQ", data, pos)
++        assert magic == 0x3130485041524745 and flags == 0
++        assert data[pos+32:pos+64] == bytes(32)
++        b = data[pos+64:pos+64+length]
++        assert len(b) == length
++        h = 14695981039346656037
++        for byte in b:
++            h = ((h ^ byte) * 1099511628211) & ((1 << 64)-1)
++        assert h == checksum
++        if kind == 1:
++            assert n is None
++            n, = struct.unpack_from("<I", b)
++            nt, nn, ne, cap = struct.unpack_from("<QQQQ", b, 24)
++            fp_at, tok_at, node_at, edge_at, index_at, tag_at, end = struct.unpack_from("<7Q", b, 56)
++            assert end == len(b)
++            tokens = struct.unpack_from(f"<{nt}i", b, tok_at)
++            for i in range(ne):
++                at, imported, count, seen = struct.unpack_from("<QQQQ", b, edge_at+i*32)
++                if count:
++                    learned[tuple(tokens[at:at+n+1])] += count
++        else:
++            assert kind == 2 and n
++            offset = 0
++            while offset < len(b):
++                count, = struct.unpack_from("<Q", b, offset)
++                offset += 8
++                seq = struct.unpack_from(f"<{count}i", b, offset)
++                offset += count*4
++                learned.update(tuple(seq[i:i+n+1]) for i in range(len(seq)-n))
++        pos += 64+length
++    return n, learned
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    for name in ("server", "upstream", "importer", "model", "output-dir"):
++        parser.add_argument("--" + name, required=True)
++    args = parser.parse_args()
++    out = pathlib.Path(args.output_dir)
++    out.mkdir(parents=True, exist_ok=True)
++    prompt = "// Implement a C++ function for binary search in a sorted vector of integers.\n// Return the index of the target, or -1 when it is absent.\n"
++    unrelated = "The planet Saturn has a system of rings. Explain their composition and how astronomers study them.\n"
++    with server(args.upstream, args.model, out, "bootstrap") as port:
++        seed = completion(port, prompt, n_predict=192)
++    corpus = out / "source.txt"
++    corpus.write_text(prompt + seed["content"])
++    database = out / "source.bin"
++    with open(out / "import.log", "w") as log:
++        subprocess.run([args.importer, "-m", args.model, "--input", str(corpus), "--output", str(database)],
++                       check=True, stdout=log, stderr=log)
++    for index, (extra, message) in enumerate([
++        ([], "--spec-type emerald-mtp requires --spec-emerald-mtp-file PATH"),
++        (["--spec-emerald-mtp-file", str(database), "--spec-emerald-mtp-n-match", "5"], "lookup length mismatch"),
++        (["--spec-emerald-mtp-file", str(database), "--spec-emerald-mtp-n-min", "17"], "n-min <= n-max"),
++        (["--spec-emerald-mtp-file", str(database), "--spec-synth-len", "2"], "rejects synthetic"),
++        (["--spec-emerald-mtp-file", str(database), "--override-kv", "tokenizer.ggml.add_bos_token=bool:true"], "metadata overrides"),
++    ]):
++        rejected = subprocess.run([args.server, "-m", args.model, "-t", "4", "-c", "2048", "--port", "0",
++                                   "--spec-type", "emerald-mtp", *extra], capture_output=True, text=True, timeout=30)
++        (out / f"startup-rejection-{index}.log").write_text(rejected.stdout + rejected.stderr)
++        assert rejected.returncode != 0 and message in rejected.stderr, (message, rejected.stderr)
++        if index == 0:
++            assert "loading model" not in rejected.stderr, "required argument was checked after model loading"
++    results = {}
++    for name, binary, extra in [
++        ("upstream", args.upstream, []),
++        ("ngram-mod", args.upstream, ["--spec-type", "ngram-mod"]),
++        ("emerald-mtp", args.server, ["--spec-type", "emerald-mtp", "--spec-emerald-mtp-file", str(database)]),
++    ]:
++        with server(binary, args.model, out, name, extra) as port:
++            completion(port, "warmup", n_predict=8)
++            results[name] = {}
++            for label, text in [("matching", prompt), ("unrelated", unrelated)]:
++                results[name][label] = [completion(port, text) for _ in range(3)]
++            # Stochastic sampling remains target-controlled; grammar must constrain every token.
++            results[name]["grammar"] = completion(port, prompt, temperature=0.8, n_predict=8,
++                                                     grammar='root ::= "0123456789"')
++    for name in ("ngram-mod", "emerald-mtp"):
++        for label in ("matching", "unrelated"):
++            assert results[name][label][0]["tokens"] == results["upstream"][label][0]["tokens"], (name, label)
++        assert results[name]["grammar"]["content"] == results["upstream"]["grammar"]["content"]
++    # A deliberately wrong imported suffix forces target rejection rather than just a lookup miss.
++    poison_text = out / "poison.txt"
++    poison_text.write_text(prompt + seed["content"][:100] + " This imported continuation is deliberately incorrect. " * 30)
++    poison_db = out / "poison.bin"
++    with open(out / "poison-import.log", "w") as log:
++        subprocess.run([args.importer, "-m", args.model, "--input", str(poison_text), "--output", str(poison_db)],
++                       check=True, stdout=log, stderr=log)
++    with server(args.server, args.model, out, "rejection",
++                ["--spec-type", "emerald-mtp,ngram-mod", "--spec-emerald-mtp-file", str(poison_db)]) as port:
++        reply = completion(port, prompt)
++        assert reply["tokens"] == results["upstream"]["matching"][0]["tokens"]
++        assert reply["timings"]["draft_n"] > reply["timings"]["draft_n_accepted"], "no rejected drafts exercised"
++        prompt_ids = post(port, "tokenize", {"content": prompt, "add_special": True})["tokens"]
++    seq = prompt_ids + reply["tokens"]
++    assert learned_counts(poison_db)[1] == collections.Counter(tuple(seq[i:i+25]) for i in range(len(seq)-24)), "rejected draft was learned"
++    # A real write failure must leave inference available and the durable database untouched.
++    failure_db = out / "failure.bin"
++    shutil.copyfile(database, failure_db)
++    original_bytes = failure_db.read_bytes()
++    try:
++        with server(args.server, args.model, out, "persistence-failure",
++                    ["--spec-type", "emerald-mtp", "--spec-emerald-mtp-file", str(failure_db)]) as port:
++            failure_db.chmod(0o400)
++            completion(port, prompt)
++            time.sleep(1.5)
++            reply = completion(port, prompt)
++            assert reply["tokens"] == results["upstream"]["matching"][0]["tokens"]
++        assert failure_db.read_bytes() == original_bytes
++        assert "learning paused" in (out / "persistence-failure.log").read_text()
++    finally:
++        failure_db.chmod(0o600)
++    # A fresh database isolates the accounting check from benchmark traffic.
++    learned_db = out / "learned.bin"
++    assert not learned_db.exists()
++    expected = collections.Counter()
++    extra = ["--spec-type", "emerald-mtp", "--spec-emerald-mtp-file", str(learned_db),
++             "--spec-emerald-mtp-n-match", "4"]
++    with server(args.server, args.model, out, "learning", extra) as port:
++        assert learned_counts(learned_db) == (4, collections.Counter())
++        locked = subprocess.run([args.importer, "-m", args.model, "--input", str(corpus),
++                                 "--output", str(learned_db), "--append"], capture_output=True, text=True)
++        assert locked.returncode != 0 and "locked" in locked.stderr, "server did not retain writer lock"
++        tokens = post(port, "tokenize", {"content": prompt, "add_special": True})["tokens"]
++        def request(_):
++            return completion(port, tokens, n_predict=32, cache_prompt=True)
++        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
++            replies = list(pool.map(request, range(4)))
++        for reply in replies:
++            seq = tokens + reply["tokens"]
++            expected.update(tuple(seq[i:i+5]) for i in range(len(seq)-4))
++        # Limit=1 exercises the final ordinary sampled token, absent from any subsequent decode.
++        reply = completion(port, tokens, n_predict=1)
++        seq = tokens + reply["tokens"]
++        expected.update(tuple(seq[i:i+5]) for i in range(len(seq)-4))
++        # Stop strings may terminate within a verified draft batch. Only processed tokens count.
++        reply = completion(port, tokens, n_predict=96, stop=["return"])
++        seq = tokens + reply["tokens"]
++        expected.update(tuple(seq[i:i+5]) for i in range(len(seq)-4))
++        # Context shifting must not re-learn the retained prompt or lose the history boundary.
++        long_tokens = post(port, "tokenize", {"content": "// padding\n" * 300 + prompt, "add_special": True})["tokens"]
++        long_tokens = long_tokens[-900:]
++        reply = completion(port, long_tokens, n_predict=160)
++        seq = long_tokens + reply["tokens"]
++        expected.update(tuple(seq[i:i+5]) for i in range(len(seq)-4))
++    n, actual = learned_counts(learned_db)
++    assert n == 4 and actual == expected, ("committed token accounting", sum(actual.values()), sum(expected.values()))
++    with server(args.server, args.model, out, "restart", extra) as port:
++        reply = completion(port, tokens, n_predict=32)
++        assert reply["tokens"] == replies[0]["tokens"]
++        seq = tokens + reply["tokens"]
++        expected.update(tuple(seq[i:i+5]) for i in range(len(seq)-4))
++    assert learned_counts(learned_db)[1] == expected, "restart learning counts"
++    with server(args.server, args.model, out, "cancellation", extra) as port:
++        payload = dict(prompt=tokens, n_predict=500, temperature=0, stream=True, return_tokens=True, ignore_eos=True)
++        req = urllib.request.Request(f"http://127.0.0.1:{port}/completion", json.dumps(payload).encode(),
++                                     {"Content-Type": "application/json"})
++        response = urllib.request.urlopen(req, timeout=120)
++        for _ in range(5):
++            while not response.readline().startswith(b"data:"):
++                pass
++        response.close()
++        time.sleep(1.5)
++        after_cancel = learned_counts(learned_db)[1]
++        time.sleep(1.5)
++        assert learned_counts(learned_db)[1] == after_cancel, "learning continued after cancellation"
++        assert sum(after_cancel.values()) - sum(expected.values()) < len(tokens) + 500, "cancel ignored"
++    before_crash = learned_counts(learned_db)[1]
++    with server(args.server, args.model, out, "crash", extra, crash=True) as port:
++        reply = completion(port, tokens, n_predict=16)
++        seq = tokens + reply["tokens"]
++        before_crash.update(tuple(seq[i:i+5]) for i in range(len(seq)-4))
++        time.sleep(1.5)  # allow a worker transaction, then terminate without destructors
++    assert learned_counts(learned_db)[1] == before_crash, "flushed learning lost after interruption"
++    with server(args.server, args.model, out, "crash-restart", extra) as port:
++        assert post(port, "tokenize", {"content": "healthy"})["tokens"]
++    (out / "results.json").write_text(json.dumps(results, indent=2))
++    print("Greedy parity, stochastic grammar, concurrent slots, prompt reuse, final token, stop, context shift, cancellation and restart accounting passed")
++    for name in results:
++        for label in ("matching", "unrelated"):
++            samples = results[name][label]
++            print(name, label, "t/s", [round(x["timings"]["predicted_per_second"], 2) for x in samples],
++                  "seconds", [round(x["wall_seconds"], 3) for x in samples])
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/test-emerald-mtp.cpp b/tests/test-emerald-mtp.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..de46f1e49cf98aaa6404f4c8e737406c05603a81
+--- /dev/null
++++ b/tests/test-emerald-mtp.cpp
+@@ -0,0 +1,294 @@
++#include "emerald-mtp.h"
++#include "speculative.h"
++#include "gguf.h"
++#include <chrono>
++#include <filesystem>
++#include <fstream>
++#include <iostream>
++#include <stdexcept>
++#include <functional>
++#include <thread>
++#include <map>
++#include <random>
++#include <atomic>
++#include <algorithm>
++#define CHECK(x) do { if (!(x)) { throw std::runtime_error(#x); } } while (0)
++static void rejects(const std::function<void()> & f) { bool caught = false; try { f(); } catch (const std::exception &) { caught = true; } CHECK(caught); }
++int main() {
++    auto dir = std::filesystem::temp_directory_path() / ("emerald-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
++    std::filesystem::create_directory(dir); auto path = (dir / "db").string();
++    try {
++        rejects([&] { emerald_database db(path, "vocab", 2, 0, false); });
++        for (uint32_t requested : {0u, 2u}) {
++            auto fresh = (dir / ("fresh-" + std::to_string(requested))).string();
++            const uint32_t n = requested ? requested : 24;
++            std::vector<llama_token> seq(n + 1, 1); seq.back() = 2;
++            {
++                emerald_database db(fresh, "vocab", requested, 0, false, true, INT32_MAX, true);
++                CHECK(std::filesystem::file_size(fresh) > 0); // durable before requests
++                CHECK(db.n_match() == n);
++                CHECK(db.draft(std::vector<llama_token>(n, 1), 1, 1).empty());
++                rejects([&] { emerald_database other(fresh, "vocab", 0, 0, false, true, INT32_MAX, true); });
++                db.observe(seq, false); // shutdown drains learning
++            }
++            {
++                emerald_database db(fresh, "vocab", 0, 0, false, true, INT32_MAX, true);
++                CHECK(db.n_match() == n);
++                CHECK(db.draft(std::vector<llama_token>(n, 1), 1, 1) == std::vector<llama_token>({2}));
++            }
++            rejects([&] { emerald_database db(fresh, "wrong", 0, 0, false, true, INT32_MAX, true); });
++            rejects([&] { emerald_database db(fresh, "vocab", n+1, 0, false, true, INT32_MAX, true); });
++        }
++        auto invalid = (dir / "empty").string();
++        { std::ofstream out(invalid); }
++        rejects([&] { emerald_database db(invalid, "vocab", 0, 0, false, true, INT32_MAX, true); });
++        CHECK(std::filesystem::file_size(invalid) == 0);
++        rejects([&] { emerald_database db((dir / "absent" / "db").string(), "vocab", 0, 0, false, true, INT32_MAX, true); });
++
++        {
++            emerald_database db(path, "vocab", 2, 0, true);
++            CHECK(db.statistics().top.empty());
++            db.observe({1,2,3,4,5}, true); db.observe({1,2,6}, true);
++            CHECK(db.draft({1,2}, 1, 3) == std::vector<llama_token>({3,4,5})); // tie: token ID
++            CHECK(db.draft({1,2}, 4, 4).empty());
++            CHECK(db.draft({1,2}, 1, 1) == std::vector<llama_token>({3}));
++            db.observe({1,2,6}, false);
++            CHECK(db.draft({1,2}, 1, 3) == std::vector<llama_token>({6}));
++            const auto stats = db.statistics(2);
++            CHECK(stats.unique_ngrams == 4 && stats.imported_ngrams == 4);
++            CHECK(stats.imported == 4 && stats.learned == 1 && !stats.counts_saturated);
++            CHECK(stats.top.size() == 2);
++            CHECK(stats.top[0].tokens == std::vector<llama_token>({1,2,6}));
++            CHECK(stats.top[0].imported == 1 && stats.top[0].learned == 1);
++            CHECK(stats.top[1].tokens == std::vector<llama_token>({1,2,3}));
++            CHECK(db.statistics(0).top.empty());
++            CHECK(db.draft({4,5}, 1, 3).empty()); // no cross-file continuation
++            rejects([&] { emerald_database other(path, "vocab", 2, 0, true); });
++            db.flush();
++        }
++        rejects([&] { emerald_database db(path, "wrong", 2, 0, false); });
++        rejects([&] { emerald_database db(path, "vocab", 3, 0, false); });
++        rejects([&] { emerald_database db(path, "vocab", 2, 0, true); });
++        {
++            emerald_database db(path, "vocab", 0, 0, false);
++            CHECK(db.n_match() == 2);
++            CHECK(db.draft({1,2}, 1, 3) == std::vector<llama_token>({6}));
++            db.observe({6,7,8}, false); db.flush();
++        }
++        { std::ofstream out(path, std::ios::binary | std::ios::app); out << "partial"; }
++        {
++            emerald_database db(path, "vocab", 0, 0, false);
++            CHECK(db.draft({6,7}, 1, 1) == std::vector<llama_token>({8}));
++            // Many keys share hash-index probe sequences: exact equality must survive collisions.
++            for (int i = 10; i < 300; ++i) { db.observe({i,i+1,i+2}, false); }
++            for (int i = 10; i < 300; ++i) { CHECK(db.draft({i,i+1},1,1) == std::vector<llama_token>({i+2})); }
++            db.flush();
++        }
++        {
++            std::ifstream in(path, std::ios::binary);
++            std::vector<uint8_t> original((std::istreambuf_iterator<char>(in)), {});
++            auto malformed = (dir / "malformed").string();
++            // Corrupt independently addressed fields and recompute the frame checksum.
++            auto get = [](const std::vector<uint8_t> & b, size_t at) {
++                uint64_t v = 0; for (int i = 0; i < 8; ++i) { v |= uint64_t(b[at+i]) << (8*i); } return v;
++            };
++            const auto node_at = 64+get(original, 64+72), edge_at = 64+get(original, 64+80);
++            const auto index_at = 64+get(original, 64+88), tag_at = 64+get(original, 64+96);
++            for (size_t at : {size_t(64), size_t(68), size_t(80), size_t(64+56), size_t(64+104),
++                              size_t(node_at), size_t(node_at+8), size_t(node_at+16), size_t(node_at+24),
++                              size_t(node_at+28), size_t(edge_at), size_t(index_at), size_t(tag_at)}) {
++                auto b = original;
++                for (size_t i = at; i < at+4; ++i) { b[i] = 254; }
++                auto length = get(b, 16);
++                uint64_t h = 14695981039346656037ULL;
++                for (size_t i = 64; i < 64+length; ++i) { h = (h ^ b[i])*1099511628211ULL; }
++                for (int i = 0; i < 8; ++i) { b[24+i] = uint8_t(h >> (8*i)); }
++                { std::ofstream out(malformed, std::ios::binary); out.write((const char *)b.data(), b.size()); }
++                rejects([&] { emerald_database db(malformed, "vocab", 0, 0, false); });
++            }
++            // A valid journal envelope with an incomplete payload is recoverable.
++            { std::ofstream out(path, std::ios::binary | std::ios::app);
++              char header[64] = {'E','G','R','A','P','H','0','1',2}; header[16] = 100;
++              out.write(header,64); out << "unfinished"; }
++            { emerald_database db(path, "vocab", 0, 0, false); CHECK(db.draft({10,11},1,1) == std::vector<llama_token>({12})); }
++            CHECK(std::filesystem::file_size(path) == original.size());
++        }
++        auto small = (dir / "small").string(); uint64_t protected_size, two_size;
++        { emerald_database db(small,"v",2,0,true); db.observe({1,2,3},true); db.flush(); protected_size=db.size_bytes(); }
++        { auto sizing = (dir / "sizing").string(); emerald_database db(sizing,"v",2,0,true);
++          db.observe({1,2,3},true); db.observe({4,5,6},false); db.flush(); two_size=db.size_bytes(); }
++        {
++            emerald_database db(small,"v",2,two_size,false);
++            db.observe({4,5,6},false); db.observe({7,8,9},false);
++            CHECK(db.draft({1,2},1,1) == std::vector<llama_token>({3}));
++            CHECK(db.draft({4,5},1,1).empty());
++            CHECK(db.draft({7,8},1,1) == std::vector<llama_token>({9}));
++            CHECK(db.size_bytes() <= two_size); db.flush();
++        }
++        { emerald_database db(small,"v",2,0,false);
++          CHECK(db.draft({4,5},1,1).empty()); CHECK(db.draft({7,8},1,1) == std::vector<llama_token>({9})); }
++        { emerald_database db(small,"v",2,protected_size,false); db.flush(); }
++        CHECK(std::filesystem::file_size(small) <= protected_size);
++        rejects([&] { emerald_database db(small,"v",2,protected_size-1,false); });
++        { emerald_database db(path,"vocab",2,0,false,true); db.observe({400,401,402},false); std::this_thread::sleep_for(std::chrono::milliseconds(1100)); }
++        { emerald_database db(path,"vocab",2,0,false); CHECK(db.draft({400,401},1,1) == std::vector<llama_token>({402})); }
++        { std::fstream f(path,std::ios::binary|std::ios::in|std::ios::out); f.seekp(64); f.put('x'); }
++        rejects([&] { emerald_database db(path,"vocab",2,0,false); });
++        CHECK(emerald_size_limit("1.25") == 1250000000ULL);
++        rejects([] { emerald_size_limit("nan"); }); rejects([] { emerald_size_limit("-1"); });
++        auto model = (dir / "tokenizer.gguf").string();
++        auto * metadata = gguf_init_empty();
++        gguf_set_val_str(metadata, "tokenizer.ggml.model", "test");
++        CHECK(gguf_write_to_file(metadata, model.c_str(), true)); gguf_free(metadata);
++        auto hooks = (dir / "hooks").string();
++        auto fp = emerald_tokenizer_fingerprint(model);
++        { emerald_database db(hooks, fp, 2, 0, true); db.observe({1,2,3,4}, true); db.flush(); }
++        common_params_speculative params;
++        params.types = {COMMON_SPECULATIVE_TYPE_EMERALD_MTP};
++        params.emerald.file = hooks; params.emerald.model = model;
++        params.emerald.n_min = 1; params.emerald.n_max = 2;
++        {
++            common_speculative_ptr spec(common_speculative_init(params, 2));
++            common_speculative_learn_prompt(spec.get(), 0, {10,11});
++            common_speculative_learn_prompt(spec.get(), 1, {20,21});
++            common_speculative_observe(spec.get(), 0, 12);
++            common_speculative_observe(spec.get(), 1, 22);
++            // Decode batches and checkpoint state replay are deliberately observation-free.
++            llama_batch batch = {};
++            CHECK(common_speculative_process(spec.get(), batch));
++            common_speculative_set_state(spec.get(), 0, {});
++            common_speculative_begin(spec.get(), 0, {90,91,92});
++            common_speculative_finalize(spec.get(), 0);
++            common_speculative_observe(spec.get(), 0, 99); // cancelled/released slot ignores observations
++            common_speculative_learn_prompt(spec.get(), 0, {30,31});
++            common_speculative_observe(spec.get(), 0, 32);
++        }
++        {
++            emerald_database db(hooks, fp, 2, 0, false);
++            CHECK(db.draft({10,11},1,1) == std::vector<llama_token>({12}));
++            CHECK(db.draft({20,21},1,1) == std::vector<llama_token>({22}));
++            CHECK(db.draft({30,31},1,1) == std::vector<llama_token>({32}));
++            CHECK(db.draft({90,91},1,1).empty());
++            CHECK(db.draft({11,12},1,1).empty());
++        }
++        params.synth_len = 1; rejects([&] { common_speculative_ptr spec(common_speculative_init(params, 2)); });
++        // Compare every draft to an independent frequency map across winner changes,
++        // table growth, missing successors, cycles, imported/learned mixing and reloads.
++        auto graph_path = (dir / "graph").string();
++        using key = std::vector<llama_token>;
++        std::map<key, std::map<llama_token, uint64_t>> reference;
++        auto expected_draft = [&](key context, uint32_t minimum, uint32_t maximum) {
++            key out;
++            for (uint32_t k = 0; k < maximum; ++k) {
++                auto it = reference.find(context); if (it == reference.end()) { break; }
++                llama_token token = -1; uint64_t best = 0;
++                for (auto candidate : it->second) {
++                    if (candidate.second > best) { token = candidate.first; best = candidate.second; }
++                }
++                out.push_back(token); context.erase(context.begin()); context.push_back(token);
++            }
++            if (out.size() < minimum) { out.clear(); } return out;
++        };
++        std::mt19937 random(17);
++        {
++            emerald_database db(graph_path, "v", 3, 0, true);
++            for (int round = 0; round < 1200; ++round) {
++                key seq;
++                for (int j = 0; j < 4+round%19; ++j) { seq.push_back(random()%7); }
++                for (size_t j = 0; j+3 < seq.size(); ++j) {
++                    ++reference[key(seq.begin()+j, seq.begin()+j+3)][seq[j+3]];
++                }
++                db.observe(seq, round%3 == 0);
++                for (size_t j = 0; j+3 < seq.size(); ++j) {
++                    key context(seq.begin()+j, seq.begin()+j+3);
++                    CHECK(db.draft(context, 1, 16) == expected_draft(context, 1, 16));
++                    CHECK(db.draft(context, 8, 8) == expected_draft(context, 8, 8));
++                }
++                if (round%41 == 0) { db.flush(); }
++            }
++            db.flush();
++        }
++        { emerald_database db(graph_path, "v", 0, 0, false);
++          for (const auto & kv : reference) { CHECK(db.draft(kv.first, 1, 32) == expected_draft(kv.first, 1, 32)); } }
++        auto transitions = (dir / "transitions").string();
++        {
++            emerald_database db(transitions, "v", 2, 0, true);
++            db.observe({1,2,3}, true); CHECK(db.draft({1,2},1,8) == key({3}));
++            db.observe({2,3,4}, false); CHECK(db.draft({1,2},1,8) == key({3,4})); // cached miss becomes a hit
++            db.observe({1,2,5,6}, false); db.observe({1,2,5,6}, false);
++            CHECK(db.draft({1,2},1,8) == key({5,6})); // cached winner/link must change
++            db.observe({2,5,1,2}, false); db.observe({2,5,1,2}, false);
++            CHECK(db.draft({1,2},1,8) == key({5,1,2,5,1,2,5,1})); // bounded cycle
++            db.flush();
++        }
++        // Eviction must restore an imported winner after clearing learned counts,
++        // even when that alternative remains present because it is also imported.
++        auto eviction = (dir / "winner-eviction").string(); uint64_t imported_bytes;
++        {
++            emerald_database db(eviction, "v", 2, 0, true);
++            db.observe({1,2,3,4}, true); db.observe({1,2,3}, true); db.observe({1,2,9}, true);
++            db.flush(); imported_bytes = db.size_bytes();
++            db.observe({1,2,9}, false); db.observe({1,2,9}, false);
++            CHECK(db.draft({1,2},1,8) == key({9}));
++            for (int i = 20; i < 80; i += 3) { db.observe({i,i+1,i+2}, false); }
++            db.flush();
++        }
++        { emerald_database db(eviction, "v", 2, imported_bytes, false);
++          CHECK(db.draft({1,2},1,8) == key({3,4})); db.flush(); }
++        { emerald_database db(eviction, "v", 0, 0, false); CHECK(db.draft({1,2},1,8) == key({3,4})); }
++        // Journal replay can need retention even when the journal file itself fits
++        // the limit: indexed graph records are larger than observation sequences.
++        auto shrink = (dir / "shrink-journal").string(); uint64_t retained_count;
++        {
++            emerald_database db(shrink, "v", 2, 0, true); db.observe({1,2,3}, true); db.flush();
++            for (int i = 100; i < 400; i += 3) { db.observe({i,i+1,i+2}, false); }
++            db.flush(); CHECK(db.size_bytes() > std::filesystem::file_size(shrink));
++        }
++        {
++            auto limit = std::filesystem::file_size(shrink); emerald_database db(shrink, "v", 2, limit, false);
++            retained_count = db.statistics().learned; CHECK(retained_count < 100); CHECK(db.size_bytes() <= limit); db.flush();
++        }
++        { emerald_database db(shrink, "v", 2, 0, false); CHECK(db.statistics().learned == retained_count); }
++        // A configured limit does not turn each small journal flush into a snapshot.
++        auto limited_journal = (dir / "limited-journal").string();
++        {
++            emerald_database db(limited_journal, "v", 2, 1000000, true);
++            db.observe({1,2,3}, true); db.flush(); auto initial = std::filesystem::file_size(limited_journal);
++            db.observe({1,2,3}, false); db.flush();
++            std::ifstream in(limited_journal, std::ios::binary); in.seekg(initial+8);
++            CHECK(in.get() == 2); CHECK(std::filesystem::file_size(limited_journal) == initial+64+8+12);
++        }
++        // A mostly repeated long observation stores only its novel fragment, even
++        // when persistence compacts a copy and the live graph remains in service.
++        auto overlap = (dir / "overlap").string();
++        {
++            emerald_database db(overlap, "v", 2, 0, true); key seq(5000);
++            for (size_t i = 0; i < seq.size(); ++i) { seq[i] = i; }
++            db.observe(seq, true); db.flush(); auto initial = db.size_bytes();
++            seq.back() = 9000; db.observe(seq, true);
++            CHECK(db.size_bytes() <= initial+256); db.flush();
++            CHECK(db.size_bytes() == std::filesystem::file_size(overlap));
++        }
++        // Snapshot capture and journal detachment race with observations and drafts.
++        auto concurrent = (dir / "concurrent").string();
++        {
++            emerald_database db(concurrent, "v", 2, 0, true, true);
++            db.observe({1,2,3,4,5}, true); db.flush();
++            std::atomic<bool> done{false}; std::exception_ptr writer_error, flush_error;
++            std::thread writer([&] { try {
++                for (int i = 0; i < 3000; ++i) { db.observe({1,2,3,4,5}, false); }
++            } catch (...) { writer_error = std::current_exception(); } done = true; });
++            std::thread saver([&] { try { while (!done) { db.flush(); } }
++                catch (...) { flush_error = std::current_exception(); } });
++            bool drafts_ok = true;
++            while (!done) { drafts_ok = drafts_ok && db.draft({1,2},1,8) == key({3,4,5}); }
++            writer.join(); saver.join();
++            if (writer_error) { std::rethrow_exception(writer_error); } if (flush_error) { std::rethrow_exception(flush_error); }
++            CHECK(drafts_ok); db.flush();
++        }
++        { emerald_database db(concurrent, "v", 2, 0, false);
++          CHECK(db.statistics().learned == 9000); CHECK(db.statistics().imported == 3);
++          CHECK(db.draft({1,2},1,8) == key({3,4,5})); }
++        std::filesystem::remove_all(dir); std::cout << "EmeraldMTP database tests passed\n"; return 0;
++    } catch (const std::exception & e) { std::cerr << e.what() << " (fixtures: " << dir << ")\n"; return 1; }
++}
+diff --git a/tools/CMakeLists.txt b/tools/CMakeLists.txt
+index c8ad1db436237c0477a26d2f35778bed83449af2..fc4bb2c2f5f280ce2c2fc3d2f8633b96e83f6932 100644
+--- a/tools/CMakeLists.txt
++++ b/tools/CMakeLists.txt
+@@ -26,6 +26,7 @@ else()
+         add_subdirectory(cli)
+         add_subdirectory(server)
+     endif()
++    add_subdirectory(pretrain-emerald-mtp)
+     add_subdirectory(tokenize)
+     add_subdirectory(tts)
+     add_subdirectory(mtmd)
+diff --git a/tools/pretrain-emerald-mtp/CMakeLists.txt b/tools/pretrain-emerald-mtp/CMakeLists.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..72b84f7382f8703f3028176f15484dfdb8850b5f
+--- /dev/null
++++ b/tools/pretrain-emerald-mtp/CMakeLists.txt
+@@ -0,0 +1,5 @@
++set(TARGET pretrain-emerald-mtp)
++add_executable(${TARGET} pretrain-emerald-mtp.cpp)
++target_link_libraries(${TARGET} PRIVATE llama-common)
++target_compile_features(${TARGET} PRIVATE cxx_std_17)
++install(TARGETS ${TARGET} RUNTIME)
+diff --git a/tools/pretrain-emerald-mtp/pretrain-emerald-mtp.cpp b/tools/pretrain-emerald-mtp/pretrain-emerald-mtp.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..247fd4f17a3358cb8ddb13fabab519e9aba8d0a6
+--- /dev/null
++++ b/tools/pretrain-emerald-mtp/pretrain-emerald-mtp.cpp
+@@ -0,0 +1,349 @@
++#include "common.h"
++#include "emerald-mtp.h"
++#include <algorithm>
++#include <atomic>
++#include <condition_variable>
++#include <functional>
++#include <mutex>
++#include <map>
++#include <iomanip>
++#include <sstream>
++#include <thread>
++#include <chrono>
++#include <cstdio>
++#include <filesystem>
++#include <fstream>
++#include <iostream>
++#include <regex>
++#include <set>
++#include <stdexcept>
++#ifdef _WIN32
++#include <io.h>
++#else
++#include <unistd.h>
++#endif
++namespace fs = std::filesystem;
++using clock_type = std::chrono::steady_clock;
++
++// Globs match relative generic paths: * excludes '/', ** includes it, ? matches one character.
++static std::regex glob(const std::string & s) {
++    std::string r = "^";
++    for (size_t i = 0; i < s.size(); ++i) {
++        char c = s[i];
++        if (c == '*') {
++            if (i+1 < s.size() && s[i+1] == '*') {
++                ++i;
++                if (i+1 < s.size() && s[i+1] == '/') { ++i; r += "(?:.*/)?"; }
++                else { r += ".*"; }
++            } else { r += "[^/]*"; }
++        } else if (c == '?') { r += "[^/]"; }
++        else { if (std::string(".\\+()[]{}^$|").find(c) != std::string::npos) { r += '\\'; } r += c; }
++    }
++    return std::regex(r + "$", std::regex::ECMAScript);
++}
++static bool matches(const std::string & s, const std::vector<std::regex> & patterns) {
++    for (auto & p : patterns) { if (std::regex_match(s, p)) { return true; } } return false;
++}
++static bool text_utf8(const std::string & s) {
++    for (size_t i = 0; i < s.size();) {
++        uint32_t c = uint8_t(s[i++]);
++        if (c < 128) { if (c == 0 || (c < 32 && c != 9 && c != 10 && c != 13 && c != 12)) { return false; } continue; }
++        unsigned n; uint32_t min;
++        if (c >= 0xc2 && c <= 0xdf) { n = 1; c &= 31; min = 128; }
++        else if (c >= 0xe0 && c <= 0xef) { n = 2; c &= 15; min = 2048; }
++        else if (c >= 0xf0 && c <= 0xf4) { n = 3; c &= 7; min = 65536; }
++        else { return false; }
++        if (n > s.size()-i) { return false; }
++        while (n--) { uint8_t d = s[i++]; if ((d & 0xc0) != 0x80) { return false; } c = (c << 6) | (d & 63); }
++        if (c < min || c > 0x10ffff || (c >= 0xd800 && c <= 0xdfff)) { return false; }
++    }
++    return true;
++}
++struct progress {
++    clock_type::time_point start = clock_type::now(), last = start;
++#ifdef _WIN32
++    bool terminal = _isatty(_fileno(stderr));
++#else
++    bool terminal = isatty(fileno(stderr));
++#endif
++    void show(const char * stage, uint64_t done, uint64_t total, uint64_t bytes, uint64_t all_bytes, bool force = false) {
++        auto now = clock_type::now();
++        if (!force && now-last < std::chrono::seconds(1)) { return; } last = now;
++        double elapsed = std::chrono::duration<double>(now-start).count();
++        double fraction = total ? double(done)/total : 0;
++        int bars = int(fraction*24);
++        double rate = elapsed > 0 ? bytes/elapsed : 0;
++        std::fprintf(stderr, "%s%s [%s%s] %llu/%s files, %llu/%s bytes, %.2f MB/s, %.1fs elapsed",
++                     terminal ? "\r" : "", stage, std::string(bars, '#').c_str(), std::string(24-bars, '-').c_str(),
++                     (unsigned long long)done, (total ? std::to_string(total) : "?").c_str(), (unsigned long long)bytes,
++                     (all_bytes ? std::to_string(all_bytes) : "?").c_str(), rate/1e6, elapsed);
++        if (rate > 0 && all_bytes >= bytes) { std::fprintf(stderr, ", ETA %.1fs", (all_bytes-bytes)/rate); }
++        std::fprintf(stderr, "%s", terminal && !force ? "    " : "\n");
++    }
++};
++// Keep progress alive during a large file's tokenization and during atomic saving.
++struct reporter {
++    progress bar;
++    const char * stage;
++    uint64_t total, all_bytes;
++    std::atomic<uint64_t> done{0}, bytes{0};
++    std::mutex mutex;
++    std::condition_variable cv;
++    bool stop = false;
++    std::thread worker;
++    reporter(const char * stage, uint64_t total, uint64_t all_bytes) : stage(stage), total(total), all_bytes(all_bytes) {
++        worker = std::thread([this] {
++            std::unique_lock<std::mutex> guard(mutex);
++            while (!cv.wait_for(guard, std::chrono::seconds(1), [this] { return stop; })) {
++                bar.show(this->stage, done, this->total, bytes, this->all_bytes, true);
++            }
++        });
++    }
++    ~reporter() {
++        { std::lock_guard<std::mutex> guard(mutex); stop = true; cv.notify_all(); }
++        worker.join(); bar.show(stage, done, total, bytes, all_bytes, true);
++    }
++};
++struct input_file { fs::path path; uint64_t size; };
++struct tokenized_file {
++    std::vector<llama_token> tokens;
++    uint64_t bytes = 0;
++    bool text = false;
++    std::exception_ptr error;
++};
++static tokenized_file tokenize_file(const input_file & f, const llama_vocab * vocab) {
++    tokenized_file result;
++    try {
++        std::ifstream in(f.path, std::ios::binary);
++        if (!in) { throw std::runtime_error("unreadable selected file: " + f.path.string()); }
++        std::string text((std::istreambuf_iterator<char>(in)), {});
++        if (in.bad()) { throw std::runtime_error("read failed: " + f.path.string()); }
++        result.bytes = text.size();
++        result.text = text_utf8(text);
++        if (result.text) {
++            if (text.size() > INT32_MAX) { throw std::runtime_error("individual file exceeds tokenizer's INT32_MAX byte limit"); }
++            result.tokens = common_tokenize(vocab, text, false, false);
++        }
++    } catch (...) { result.error = std::current_exception(); }
++    return result;
++}
++// Bounded lookahead; workers share the immutable vocabulary, never the database.
++// The source-byte budget is not a RAM limit; one oversized file may run alone.
++class tokenizer_queue {
++    const std::vector<input_file> & files;
++    const llama_vocab * vocab;
++    std::vector<tokenized_file> results;
++    std::vector<bool> ready;
++    std::vector<std::thread> workers;
++    std::mutex mutex;
++    std::condition_variable cv;
++    size_t next = 0, consumed = 0;
++    uint64_t pending_bytes = 0;
++    bool stop = false;
++    void finish() {
++        { std::lock_guard<std::mutex> lock(mutex); stop = true; }
++        cv.notify_all();
++        for (auto & worker : workers) { worker.join(); }
++    }
++public:
++    tokenizer_queue(const std::vector<input_file> & files, const llama_vocab * vocab, size_t threads)
++        : files(files), vocab(vocab), results(2*threads), ready(2*threads, false) {
++        try {
++            for (size_t i = 0; i < threads; ++i) {
++                workers.emplace_back([this] {
++                    for (;;) {
++                        size_t index;
++                        {
++                            std::unique_lock<std::mutex> lock(mutex);
++                            cv.wait(lock, [this] {
++                                return stop || next == this->files.size() ||
++                                    (next-consumed < results.size() &&
++                                     (next == consumed || (pending_bytes <= 32*1024*1024 &&
++                                      this->files[next].size <= 32*1024*1024-pending_bytes)));
++                            });
++                            if (stop || next == this->files.size()) { return; }
++                            index = next++;
++                            pending_bytes += this->files[index].size;
++                        }
++                        auto result = tokenize_file(this->files[index], this->vocab);
++                        {
++                            std::lock_guard<std::mutex> lock(mutex);
++                            results[index % results.size()] = std::move(result);
++                            ready[index % results.size()] = true;
++                        }
++                        cv.notify_all();
++                    }
++                });
++            }
++        } catch (...) { finish(); throw; }
++    }
++    ~tokenizer_queue() { finish(); }
++    tokenized_file take() {
++        std::unique_lock<std::mutex> lock(mutex);
++        const size_t slot = consumed % results.size();
++        cv.wait(lock, [&] { return ready[slot]; });
++        auto result = std::move(results[slot]);
++        ready[slot] = false;
++        pending_bytes -= files[consumed++].size;
++        lock.unlock(); cv.notify_all();
++        return result;
++    }
++};
++
++// Escape controls and cap previews so corpus text cannot disrupt terminal output.
++static std::string preview(const std::string & text) {
++    std::ostringstream out;
++    out << '"';
++    const size_t limit = std::min(text.size(), size_t(160));
++    for (size_t i = 0; i < limit; ++i) {
++        const unsigned char c = text[i];
++        if (c == '\n') { out << "\\n"; }
++        else if (c == '\r') { out << "\\r"; }
++        else if (c == '\t') { out << "\\t"; }
++        else if (c == '"' || c == '\\') { out << '\\' << char(c); }
++        else if (c < 32 || c >= 127) { out << "\\x" << std::hex << std::setw(2) << std::setfill('0') << unsigned(c); }
++        else { out << char(c); }
++    }
++    if (limit < text.size()) { out << "..."; }
++    out << '"';
++    return out.str();
++}
++int main(int argc, char ** argv) {
++    try {
++        const auto started = clock_type::now();
++        size_t threads = std::min(8u, std::max(1u, std::thread::hardware_concurrency()));
++        std::string model, output; std::vector<std::string> inputs;
++        std::vector<std::regex> includes, excludes; uint32_t n = 0; uint64_t limit = 0; bool append = false, verbose = false;
++        for (int i = 1; i < argc; ++i) {
++            std::string arg = argv[i];
++            if (arg == "--help" || arg == "-h") {
++                std::cout << "pretrain-emerald-mtp -m MODEL --input PATH [--input PATH ...] --output DB\n"
++                             "  --n-match N        Lookup length (default: 24, inferred on append)\n"
++                             "  --max-size-gb GB   Decimal GB; 0 means unlimited\n"
++                             "  --append           Explicitly extend an existing compatible database\n"
++                             "  --include GLOB     Repeatable relative path glob (*, **, ?)\n"
++                             "  --exclude GLOB     Repeatable exclusion glob; exclusions win\n"
++                             "  --threads N        CPU tokenization workers (default: up to 8; 1 = serial)\n"
++                             "  --verbose          Report files skipped by glob filters\n"; return 0;
++            }
++            if (arg == "--verbose") { verbose = true; continue; }
++            if (arg == "--append") { append = true; continue; }
++            if (++i == argc) { throw std::runtime_error("missing value for " + arg); }
++            std::string v = argv[i];
++            if (arg == "-m" || arg == "--model") { model = v; }
++            else if (arg == "--input") { inputs.push_back(v); }
++            else if (arg == "--output") { output = v; }
++            else if (arg == "--include") { includes.push_back(glob(v)); }
++            else if (arg == "--exclude") { excludes.push_back(glob(v)); }
++            else if (arg == "--max-size-gb") { limit = emerald_size_limit(v); }
++            else if (arg == "--threads" || arg == "-t") {
++                size_t end; auto value = std::stol(v, &end);
++                if (end != v.size() || value < 1 || value > 256) { throw std::runtime_error("threads must be 1..256"); }
++                threads = value;
++            }
++            else if (arg == "--n-match") {
++                size_t end; auto value = std::stol(v, &end);
++                if (end != v.size() || value < 1 || value > 1024) { throw std::runtime_error("n-match must be 1..1024"); } n = value;
++            } else { throw std::runtime_error("unknown argument: " + arg); }
++        }
++        if (model.empty() || output.empty() || inputs.empty()) { throw std::runtime_error("model, input and output are required; see --help"); }
++        std::fprintf(stderr, "Discovery: scanning inputs\n"); progress bar;
++        std::vector<input_file> files; std::set<std::string> seen;
++        uint64_t total_bytes = 0, skipped = 0;
++        std::map<std::string, uint64_t> skip_reasons;
++        auto skip = [&](const fs::path & p, const char * why, bool report = true) {
++            ++skipped; ++skip_reasons[why];
++            if (report) { std::fprintf(stderr, "skip %s: %s\n", p.string().c_str(), why); }
++        };
++        auto select = [&](const fs::path & p, const std::string & relative) {
++            if ((!includes.empty() && !matches(relative, includes)) || matches(relative, excludes)) { skip(p, "glob filter", verbose); return; }
++            auto key = fs::canonical(p).string();
++            if (!seen.insert(key).second) { skip(p, "duplicate input"); return; }
++            auto size = fs::file_size(p); files.push_back({p, size}); total_bytes += size;
++            bar.show("Discovery", files.size(), 0, total_bytes, 0);
++        };
++        for (auto & input : inputs) {
++            fs::path root(input); auto status = fs::symlink_status(root);
++            if (fs::is_symlink(status) || root.filename() == ".git") { skip(root, "symlink or .git"); continue; }
++            if (fs::is_regular_file(status)) { select(root, root.filename().generic_string()); }
++            else if (fs::is_directory(status)) {
++                if (root.filename() == ".git") { skip(root, ".git"); continue; }
++                std::function<void(const fs::path &)> visit = [&](const fs::path & directory) {
++                    std::vector<fs::path> children;
++                    for (const auto & item : fs::directory_iterator(directory)) { children.push_back(item.path()); }
++                    std::sort(children.begin(), children.end());
++                    for (const auto & p : children) {
++                        auto st = fs::symlink_status(p);
++                        if (fs::is_symlink(st) || p.filename() == ".git") { skip(p, "symlink or .git"); }
++                        else if (fs::is_directory(st)) { visit(p); }
++                        else if (fs::is_regular_file(st)) { select(p, p.lexically_relative(root).generic_string()); }
++                        else { skip(p, "not a regular file"); }
++                    }
++                };
++                visit(root);
++            } else { throw std::runtime_error("unreadable input: " + input); }
++        }
++        std::sort(files.begin(), files.end(), [](const input_file & a, const input_file & b) { return a.path.generic_string() < b.path.generic_string(); });
++        bar.show("Discovery", files.size(), files.size(), total_bytes, total_bytes, true);
++        auto fp = emerald_tokenizer_fingerprint(model);
++        llama_model_params params = llama_model_default_params(); params.vocab_only = true;
++        llama_model_ptr vocab_model(llama_model_load_from_file(model.c_str(), params));
++        if (!vocab_model) { throw std::runtime_error("cannot load vocabulary"); }
++        emerald_database db(output, fp, n ? n : (append ? 0 : 24), limit, !append, false, llama_vocab_n_tokens(llama_model_get_vocab(vocab_model.get())));
++        const auto before = db.statistics(0);
++        uint64_t imported_files = 0, imported_bytes = 0, imported_tokens = 0, added = 0, short_files = 0;
++        {
++        const auto * vocab = llama_model_get_vocab(vocab_model.get());
++        threads = std::min(threads, std::max(size_t(1), files.size()));
++        std::fprintf(stderr, "Tokenization: %zu CPU worker(s); ordered database indexing\n", threads);
++        std::unique_ptr<tokenizer_queue> queue;
++        if (threads > 1) { queue.reset(new tokenizer_queue(files, vocab, threads)); }
++        reporter indexing("Tokenization/indexing", files.size(), total_bytes);
++        for (auto & f : files) {
++            auto result = queue ? queue->take() : tokenize_file(f, vocab);
++            if (result.error) { std::rethrow_exception(result.error); }
++            if (!result.text) { skip(f.path, "binary or invalid UTF-8"); }
++            else {
++                db.observe(result.tokens, true);
++                ++imported_files; imported_bytes += result.bytes; imported_tokens += result.tokens.size();
++                if (result.tokens.size() > db.n_match()) { added += result.tokens.size()-db.n_match(); }
++                else { ++short_files; }
++            }
++            indexing.bytes += f.size; ++indexing.done;
++        }
++        }
++        std::fprintf(stderr, "Saving: compacting database (atomic replacement needs a second copy)\n");
++        { reporter saving("Saving", 1, 0); db.flush(); saving.bytes = db.size_bytes(); saving.done = 1; }
++        std::fprintf(stderr, "Saved %s: %llu compacted bytes; %llu skipped files\n", output.c_str(),
++                     (unsigned long long)db.size_bytes(), (unsigned long long)skipped);
++        const auto stats = db.statistics();
++        const double elapsed = std::chrono::duration<double>(clock_type::now()-started).count();
++        std::fprintf(stderr, "Import summary (this run):\n"
++                             "  Files: %llu selected, %llu imported, %llu too short for an n-gram\n"
++                             "  Imported: %llu bytes, %llu tokens; %.2fs elapsed\n"
++                             "  N-grams added: %llu occurrences, %llu new unique imported n-grams\n",
++                     (unsigned long long)files.size(), (unsigned long long)imported_files, (unsigned long long)short_files,
++                     (unsigned long long)imported_bytes, (unsigned long long)imported_tokens, elapsed,
++                     (unsigned long long)added,
++                     (unsigned long long)(stats.imported_ngrams-before.imported_ngrams));
++        for (const auto & reason : skip_reasons) {
++            std::fprintf(stderr, "  Skipped (%s): %llu\n", reason.first.c_str(), (unsigned long long)reason.second);
++        }
++        if (files.empty()) { std::fprintf(stderr, "  No files selected: check --input and relative-path --include/--exclude globs.\n"); }
++        std::fprintf(stderr, "Database totals (including previous imports/learning):\n"
++                             "  %llu unique %u-token n-grams (n-match %u + next token)\n"
++                             "  Occurrences: %llu imported, %llu learned%s\n"
++                             "Top %zu n-grams by imported + learned occurrences:\n",
++                     (unsigned long long)stats.unique_ngrams, db.n_match()+1, db.n_match(),
++                     (unsigned long long)stats.imported, (unsigned long long)stats.learned,
++                     stats.counts_saturated ? " (totals saturated at UINT64_MAX)" : "", stats.top.size());
++        for (size_t i = 0; i < stats.top.size(); ++i) {
++            const auto & entry = stats.top[i];
++            std::fprintf(stderr, "  %zu. imported=%llu learned=%llu %s\n", i+1,
++                         (unsigned long long)entry.imported, (unsigned long long)entry.learned,
++                         preview(common_detokenize(llama_model_get_vocab(vocab_model.get()), entry.tokens, true)).c_str());
++        }
++        if (stats.top.empty()) { std::fprintf(stderr, "  (none)\n"); }
++        return 0;
++    } catch (const std::exception & e) { std::fprintf(stderr, "pretrain-emerald-mtp: %s\n", e.what()); return 1; }
++}
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index f78cfb36dd7dbeae8a144319d6d328ec5a1fda0f..6fedc6582dcb90285eff50d7c22cd46641dc9e71 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -1258,15 +1258,33 @@ private:
+         // try speculative decoding
+         if (ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
+             try {
++                if (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
++                              COMMON_SPECULATIVE_TYPE_EMERALD_MTP) != params_base.speculative.types.end()) {
++                    for (const auto & kv : params_base.kv_overrides) {
++                        if (std::string(kv.key).compare(0, 10, "tokenizer.") == 0) {
++                            throw std::invalid_argument("EmeraldMTP requires the GGUF tokenizer without tokenizer metadata overrides");
++                        }
++                    }
++                }
++                params_base.speculative.emerald.model = params_base.model.path;
++                params_base.speculative.emerald.vocab_size = llama_vocab_n_tokens(vocab);
+                 spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
+             } catch (const std::exception & e) {
+                 SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
+-                if (params_base.speculative.has_synth()) {
++                if (params_base.speculative.has_synth() ||
++                    std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
++                              COMMON_SPECULATIVE_TYPE_EMERALD_MTP) != params_base.speculative.types.end()) {
+                     return false;
+                 }
+             }
+         }
+ 
++        if (!spec && std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
++                               COMMON_SPECULATIVE_TYPE_EMERALD_MTP) != params_base.speculative.types.end()) {
++            SRV_ERR("%s", "EmeraldMTP requires a target context that supports speculative verification\n");
++            return false;
++        }
++
+         if (ctx_dft) {
+             ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft);
+         }
+@@ -1300,6 +1318,7 @@ private:
+             SLT_TRC(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
+ 
+             slot.callback_on_release = [this](int id_slot) {
++                common_speculative_finalize(spec.get(), id_slot);
+                 queue_tasks.pop_deferred_task(id_slot);
+             };
+ 
+@@ -1958,6 +1977,7 @@ private:
+ 
+         SLT_DBG(slot, "n_gen = %d, n_remaining = %d, next token: %5d '%s'\n", (int) slot.stats.n_gen, slot.n_remaining(), result.tok, token_str.c_str());
+ 
++        common_speculative_observe(spec.get(), slot.id, result.tok);
+         return slot.has_next_token; // continue
+     }
+ 
+@@ -3820,6 +3840,9 @@ private:
+                 // prompt evaluated for next-token prediction
+                 slot.state = SLOT_STATE_GENERATING;
+ 
++                if (spec && !slot.prompt.tokens.has_mtmd) {
++                    common_speculative_learn_prompt(spec.get(), slot.id, slot.prompt.tokens.get_text_tokens());
++                }
+                 if (slot.can_speculate()) {
+                     common_speculative_begin(spec.get(), slot.id, slot.prompt.tokens.get_text_tokens());
+                 }

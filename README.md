@@ -47,12 +47,55 @@ For Vulkan, add `-DGGML_VULKAN=ON` when configuring CMake. The selector does not
 | `turboquant` | Experimental CPU implementations of 2/3/4-bit KV cache and TQ3_1S/TQ4_1S weight quantization | `-fa on -ctk turbo4_0 -ctv turbo4_0` |
 | `turboquant_vulkan` | Vulkan turbo4 KV storage, attention, and WHT rotation; requires `turboquant` | Build with Vulkan, use `-ctk turbo4_0 -ctv turbo4_0` |
 | `moe_expert_cache` | Device-resident cache of MoE expert slices to reduce repeated host transfers | `--moe-expert-cache 1024` (MiB per participating backend; default 0 disables it) |
+| `emerald_mtp` | Persistent source-fragment speculation from imported text and verified conversations | `--spec-type emerald-mtp --spec-emerald-mtp-file ./emeraldmtp.bin` |
 
 | `hauhaucs_fastmtp` | HauhauCS FastMTP: Qwen3.5 MTP draft-vocabulary trimming and full-vocabulary logits mapping | `./configure.py --enable hauhaucs_fastmtp`; requires an MTP-only model with `d2t` and trimmed `output.weight` |
 
 TurboQuant provides experimental CPU reference implementations and Vulkan acceleration for turbo4/turbo4. Turbo2, turbo3, and TQ weights use CPU implementations. Unsupported operations may fall back to CPU. Check startup logs for the actual placement and backend.
 
 The MoE cache helps only workloads that transfer CPU-resident expert weights to a device. It needs additional device memory and is not a substitute for full expert offload. It falls back to host transfers if a cache allocation or copy cannot be used. Performance and long-context model quality require workload-specific evaluation.
+
+## EmeraldMTP source-fragment speculation
+
+`emerald_mtp` is an independent experimental patch. It proposes continuations from exact token fragments in imported text and learned conversations. The target model verifies proposals through upstream speculative sampling, including grammar constraints. It does not add files to the model context or train model weights.
+
+```sh
+./configure.py --enable emerald_mtp
+cmake -S llama.cpp -B llama.cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build llama.cpp/build -j --target llama-server pretrain-emerald-mtp
+
+llama.cpp/build/bin/pretrain-emerald-mtp \
+  -m model.gguf --input ./project --output ./emeraldmtp.bin
+
+llama.cpp/build/bin/llama-server -m model.gguf \
+  --spec-type emerald-mtp \
+  --spec-emerald-mtp-n-min 8 --spec-emerald-mtp-n-max 16 \
+  --spec-emerald-mtp-file ./emeraldmtp.bin
+```
+
+Pretraining is optional: the server creates a missing database at startup and fills it from prompts and verified replies. Its parent directory must exist and be writable. Existing databases are loaded and validated.
+
+The importer loads the GGUF vocabulary without weights. Each file is tokenized separately with whitespace preserved, no added special tokens, and no interpretation of special-token spellings. Repeat `--input` for multiple files or directories. Traversal is sorted; symlinks, `.git`, binary files, and invalid UTF-8 are skipped and reported. An unreadable selected file fails the import. Repeat `--include` and `--exclude` for relative-path globs: `*` stays within a path component, `**` crosses directories, and `?` matches one character. Exclusions win. Glob-filter skip messages are shown only with `--verbose`; filtered files still count in the skipped-file total.
+
+```sh
+llama.cpp/build/bin/pretrain-emerald-mtp -m model.gguf \
+  --input ./src --input ./docs --include '**/*.cpp' --include '**/*.md' \
+  --exclude '**/generated/**' --output ./emeraldmtp.bin --append
+```
+
+An existing output requires explicit `--append`; a failed import does not save partial observations. This tool is the only source-file import interface. File reading and tokenization use up to 8 CPU workers by default; `--threads N` (or `-t N`) selects 1–256 workers, with 1 selecting serial execution. Database insertion stays in sorted file order. Worker lookahead is bounded to twice the worker count and 32 MiB of discovered source bytes; a larger file runs alone. This is not a RAM limit: tokenization needs additional working memory and files may change after discovery. To omit installed Python dependencies, use `--exclude '**/.venv/**'`. Discovery, tokenization/indexing, and saving report progress on stderr, including periodic lines when redirected. The final summary reports selected/imported files, skipped reasons, imported bytes and tokens, n-gram occurrences added, newly imported distinct n-grams, and database totals. The top 10 stored n-grams (each `n-match + 1` tokens) are ranked by combined imported and learned frequency, with escaped text previews capped at 160 bytes. Database totals and rankings include previous data when appending.
+
+`--spec-type emerald-mtp` requires `--spec-emerald-mtp-file PATH`; a missing path is rejected during argument parsing, before model loading or context allocation. The default lookup length is 24 tokens (`--n-match` in the importer). A newly created server database also defaults to 24 tokens. The server and append importer infer it from an existing database; an explicit `--spec-emerald-mtp-n-match` or `--n-match` must agree. Draft lengths default to 8–16 and must satisfy `1 <= n-min <= n-max`; all lengths are limited to 1024. Upstream context, batch, and remaining-output limits still apply. `--spec-type emerald-mtp,ngram-mod` tries EmeraldMTP first and falls through on insufficient matches. Synthetic acceptance options and `tokenizer.*` metadata overrides are rejected.
+
+One context graph and open-addressed hash index serve all server slots. An exact initial lookup resolves hash collisions; drafts then follow cached winning-token and successor-node links. Observations update winners immediately using saturating imported-plus-learned counts, with lower token ID breaking ties. Text prompts are observed once when ready for generation; committed output tokens, including the final token, are learned as the server processes them. Rejected drafts and checkpoint/decode replay do not update the database. Slot release clears sequence tracking. Learning is disabled for multimodal prompts. Tokens that trigger a stop condition are included; later tokens in the verified batch are excluded.
+
+The little-endian `EGRAPH01` database stores aligned sections for packed token ranges, context nodes, continuation counts, and a persisted tagged hash index. Context nodes cache the winning token and successor ID. It retains 64-bit offsets/counts and full tokenizer GGUF metadata as a collision-free compatibility identity, including vocabulary, merges, special-token settings, and other `tokenizer.*` fields. See the [context graph format](docs/emerald_mtp.md) for the layout and lookup rules. Checksummed append transactions preserve learned observations between snapshots. Recovery discards an incomplete final journal transaction; malformed or incompatible databases are rejected. An OS writer lock on the adjacent `.lock` file remains held throughout server/importer lifetime. Stop the server before appending with the importer.
+
+The server worker flushes at one-second intervals and drains at orderly shutdown. An abrupt exit can lose observations not yet flushed. A persistence failure is reported and pauses learning while existing lookups remain available. Compaction atomically replaces the database and temporarily requires space for a second copy. Journal writes, snapshot packing, checksumming, disk sync, and snapshot replacement run outside the database mutex. Snapshot generation copying, learning, and retention still take that mutex and can delay lookups; compaction needs extra RAM for the captured graph and serialization buffers.
+
+`--max-size-gb` (importer) and `--spec-emerald-mtp-max-size-gb` (server) limit compacted file contents, using decimal GB; `0` means unlimited. Retention removes the least recently observed learned entries first and preserves imported counts. Imports whose protected contents exceed the limit fail. Learning pauses when the limit leaves no room for learned entries. Compaction bounds journal growth without forcing a snapshot on every flush merely because a limit is configured; the limit does not bound RAM or temporary disk usage.
+
+Build and run `test-emerald-mtp` and `test-arg-parser`. The opt-in `test-emerald-mtp-bench [corpus_tokens] [queries]` target measures exact hits, misses, and contexts with many alternatives. Opt-in Python importer/server tests under `llama.cpp/tests/test-emerald-mtp-*.py` require a local GGUF and accept `--help`. See [validation results](docs/emerald-mtp-validation.md) for measured performance, corpus details, and validation limits.
 
 ## Keeping local work safe
 

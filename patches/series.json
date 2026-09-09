@@ -19,6 +19,10 @@
     {
       "name": "hauhaucs_fastmtp",
       "description": "HauhauCS FastMTP: Qwen3.5 MTP draft-vocabulary trimming with d2t logits mapping"
+    },
+    {
+      "name": "emerald_mtp",
+      "description": "Persistent source-fragment speculation from imported text and verified conversations"
     }
   ]
 }
