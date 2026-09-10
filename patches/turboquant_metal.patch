@@ -103,18 +103,26 @@ index 0d1429d9d368255f15bd77cecc962fb90d819556..b5af4cc80da32e765cd80fdee75c614a
 +    }
 +}
 diff --git a/ggml/src/ggml-metal/kernels/fa.metal b/ggml/src/ggml-metal/kernels/fa.metal
-index d0e928d732cc8dea76cecee3c4e13a0c8f1458a5..8ae8af309464d4d9a5732c1da77a6afd446933ac 100644
+index d0e928d732cc8dea76cecee3c4e13a0c8f1458a5..18faacaa397ad0e289814c34d3bfcf9ce3f1d5e0 100644
 --- a/ggml/src/ggml-metal/kernels/fa.metal
 +++ b/ggml/src/ggml-metal/kernels/fa.metal
-@@ -2443,3 +2443,35 @@ template [[host_name("kernel_lightning_indexer_q4_1")]] kernel kernel_lightning_
- template [[host_name("kernel_lightning_indexer_q5_0")]] kernel kernel_lightning_indexer_t kernel_lightning_indexer<block_q5_0, 2, dequantize_q5_0>;
- template [[host_name("kernel_lightning_indexer_q5_1")]] kernel kernel_lightning_indexer_t kernel_lightning_indexer<block_q5_1, 2, dequantize_q5_1>;
- template [[host_name("kernel_lightning_indexer_q8_0")]] kernel kernel_lightning_indexer_t kernel_lightning_indexer<block_q8_0, 2, dequantize_q8_0>;
-+
-+// TurboQuant: 128-element blocks, with the old rotated-domain dequantizers.
+@@ -1053,6 +1053,11 @@ template [[host_name("kernel_flash_attn_ext_q8_0_dk320_dv256")]] kernel flash_at
+ template [[host_name("kernel_flash_attn_ext_q8_0_dk512_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 512, 512>;
+ template [[host_name("kernel_flash_attn_ext_q8_0_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 576, 512>;
+
++// TurboQuant attention with 128-element blocks.
 +template [[host_name("kernel_flash_attn_ext_turbo4_0_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128>;
 +template [[host_name("kernel_flash_attn_ext_turbo4_0_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256>;
 +template [[host_name("kernel_flash_attn_ext_turbo4_0_dk512_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 512, 512>;
++
+ #undef FA_TYPES
+ #undef FA_TYPES_BF
+ #undef FA_TYPES_F32
+@@ -2247,6 +2252,35 @@ template [[host_name("kernel_flash_attn_ext_vec_q8_0_dk576_dv512_q4_ne2")]] kern
+ template [[host_name("kernel_flash_attn_ext_vec_q8_0_dk576_dv512_q4_ne4")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_q8_0, 8, dequantize_q8_0_t4, block_q8_0,  8, dequantize_q8_0_t4, 576, 512, 4, 4>;
+
+
++// TurboQuant decode and tuning variants.
 +template [[host_name("kernel_flash_attn_ext_vec_turbo4_0_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_turbo4_0, 32, dequantize_turbo4_0_t4, block_turbo4_0,  32, dequantize_turbo4_0_t4, 128, 128, 1>;
 +template [[host_name("kernel_flash_attn_ext_vec_turbo4_0_dk128_dv128_q1_ne2")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_turbo4_0, 32, dequantize_turbo4_0_t4, block_turbo4_0,  32, dequantize_turbo4_0_t4, 128, 128, 2, 1>;
 +template [[host_name("kernel_flash_attn_ext_vec_turbo4_0_dk128_dv128_q1_ne4")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_turbo4_0, 32, dequantize_turbo4_0_t4, block_turbo4_0,  32, dequantize_turbo4_0_t4, 128, 128, 4, 1>;
@@ -142,6 +150,10 @@ index d0e928d732cc8dea76cecee3c4e13a0c8f1458a5..8ae8af309464d4d9a5732c1da77a6afd
 +template [[host_name("kernel_flash_attn_ext_vec_turbo4_0_dk512_dv512_q4_ne1")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_turbo4_0, 32, dequantize_turbo4_0_t4, block_turbo4_0,  32, dequantize_turbo4_0_t4, 512, 512, 1, 4>;
 +template [[host_name("kernel_flash_attn_ext_vec_turbo4_0_dk512_dv512_q4_ne2")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_turbo4_0, 32, dequantize_turbo4_0_t4, block_turbo4_0,  32, dequantize_turbo4_0_t4, 512, 512, 2, 4>;
 +template [[host_name("kernel_flash_attn_ext_vec_turbo4_0_dk512_dv512_q4_ne4")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_turbo4_0, 32, dequantize_turbo4_0_t4, block_turbo4_0,  32, dequantize_turbo4_0_t4, 512, 512, 4, 4>;
++
+ #undef FA_TYPES
+ #undef FA_TYPES_F32
+
 diff --git a/ggml/src/ggml-metal/kernels/quantize.metal b/ggml/src/ggml-metal/kernels/quantize.metal
 index 42ca6d74a0bdbc756331a0dda22d51ff0a281d0e..9ca49b6b5ccbdc16cd143e4e1ac92cb84fa3ee9d 100644
 --- a/ggml/src/ggml-metal/kernels/quantize.metal
