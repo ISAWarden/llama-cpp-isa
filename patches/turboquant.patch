@@ -1988,15 +1988,35 @@ index 4cbd5fe21..106ff2374 100644
          cur = llama_mul_mat_hadamard(ctx0, cur, v_rot);
      }
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index a342ee119..2679ae525 100644
+index a342ee119..385d40965 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -14,10 +14,18 @@
+@@ -14,10 +14,38 @@
  #include <stdexcept>
  #include <unordered_map>
  
 +static bool llama_ggml_type_is_turbo(ggml_type type) {
 +    return type == GGML_TYPE_TURBO2_0 || type == GGML_TYPE_TURBO3_0 || type == GGML_TYPE_TURBO4_0;
++}
++
++// Cache writes are in-place: the scheduler cannot move an unsupported SET_ROWS
++// operation away from an already allocated device buffer. Probe before allocation.
++static bool llama_kv_cache_supports_set_rows(ggml_backend_dev_t dev, ggml_type type, int64_t width) {
++    ggml_init_params params = { 4 * ggml_tensor_overhead(), nullptr, true };
++    ggml_context_ptr ctx(ggml_init(params));
++    if (!ctx) {
++        throw std::runtime_error("failed to create KV cache capability probe");
++    }
++
++    auto * cache = ggml_new_tensor_2d(ctx.get(), type, width, 1);
++    auto * values = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, width, 1);
++    auto * indices = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I64, 1);
++    auto * write = ggml_set_rows(ctx.get(), cache, values, indices);
++    if (llama_ggml_type_is_turbo(type)) {
++        const int32_t wht_group = 128;
++        memcpy(write->op_params, &wht_group, sizeof(wht_group));
++    }
++    return ggml_backend_dev_supports_op(dev, write);
 +}
 +
  static bool ggml_is_power_of_2(int n) {
@@ -2010,7 +2030,7 @@ index a342ee119..2679ae525 100644
  // orthonormal Walsh-Hadamard rotation matrix
  // note: res^2 == I
  static void ggml_gen_hadamard(ggml_tensor * tensor) {
-@@ -114,7 +122,7 @@ llama_kv_cache::llama_kv_cache(
+@@ -114,7 +142,7 @@ llama_kv_cache::llama_kv_cache(
          auto it = ctx_map.find(buft);
          if (it == ctx_map.end()) {
              ggml_init_params params = {
@@ -2019,7 +2039,7 @@ index a342ee119..2679ae525 100644
                  /*.mem_buffer =*/ NULL,
                  /*.no_alloc   =*/ true,
              };
-@@ -208,6 +216,32 @@ llama_kv_cache::llama_kv_cache(
+@@ -208,6 +236,32 @@ llama_kv_cache::llama_kv_cache(
          // [TAG_V_CACHE_VARIABLE]
          const uint32_t n_embd_k_gqa =            hparams.n_embd_k_gqa(il);
          const uint32_t n_embd_v_gqa = !v_trans ? hparams.n_embd_v_gqa(il) : hparams.n_embd_v_gqa_max();
@@ -2052,7 +2072,28 @@ index a342ee119..2679ae525 100644
  
          const char * dev_name = "CPU";
  
-@@ -230,8 +264,8 @@ llama_kv_cache::llama_kv_cache(
+@@ -215,9 +269,17 @@ llama_kv_cache::llama_kv_cache(
+
+         if (offload) {
+             auto * dev = model.dev_layer(il);
+-            buft = ggml_backend_dev_buffer_type(dev);
+-
+-            dev_name = ggml_backend_dev_name(dev);
++            const bool turbo_cache = llama_ggml_type_is_turbo(type_k) ||
++                                     (!is_mla && llama_ggml_type_is_turbo(type_v));
++            if (turbo_cache &&
++                    (!llama_kv_cache_supports_set_rows(dev, type_k, n_embd_k_gqa_eff) ||
++                     (!is_mla && !llama_kv_cache_supports_set_rows(dev, type_v, n_embd_v_gqa_eff)))) {
++                LLAMA_LOG_WARN("%s: layer %d: %s cannot write KV cache types %s/%s; using CPU cache storage\n",
++                        __func__, il, ggml_backend_dev_name(dev), ggml_type_name(type_k), ggml_type_name(type_v));
++            } else {
++                buft = ggml_backend_dev_buffer_type(dev);
++                dev_name = ggml_backend_dev_name(dev);
++            }
+         }
+
+         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
+@@ -230,8 +292,8 @@ llama_kv_cache::llama_kv_cache(
          const bool has_k = true;
          const bool has_v = !is_mla;
  
@@ -2063,7 +2104,7 @@ index a342ee119..2679ae525 100644
  
          has_k && ggml_format_name(k, "cache_%sk_l%d", name_tag, il);
          has_v && ggml_format_name(v, "cache_%sv_l%d", name_tag, il);
-@@ -240,13 +274,18 @@ llama_kv_cache::llama_kv_cache(
+@@ -240,13 +302,18 @@ llama_kv_cache::llama_kv_cache(
          std::vector<ggml_tensor *> v_stream;
  
          for (uint32_t s = 0; s < n_stream; ++s) {
@@ -2084,7 +2125,7 @@ index a342ee119..2679ae525 100644
      }
  
      if (reuse) {
-@@ -291,6 +330,13 @@ llama_kv_cache::llama_kv_cache(
+@@ -291,6 +358,13 @@ llama_kv_cache::llama_kv_cache(
          LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
  
          ggml_backend_buffer_clear(buf, 0);
@@ -2098,7 +2139,7 @@ index a342ee119..2679ae525 100644
          ctxs_bufs.emplace_back(std::move(ctx), buf);
      }
  
-@@ -321,6 +367,7 @@ llama_kv_cache::llama_kv_cache(
+@@ -321,6 +395,7 @@ llama_kv_cache::llama_kv_cache(
          attn_rot_k =
              !attn_rot_disable &&
              n_embd_head_k_all > 0 &&
@@ -2106,7 +2147,7 @@ index a342ee119..2679ae525 100644
              ggml_is_quantized(type_k) &&
              hparams.n_embd_head_k() % 64 == 0;
  
-@@ -334,6 +381,7 @@ llama_kv_cache::llama_kv_cache(
+@@ -334,6 +409,7 @@ llama_kv_cache::llama_kv_cache(
          attn_rot_v =
              !attn_rot_disable &&
              n_embd_head_v_all > 0 &&
@@ -2114,7 +2155,7 @@ index a342ee119..2679ae525 100644
              ggml_is_quantized(type_v) &&
              hparams.n_embd_head_v() % 64 == 0;
      }
-@@ -376,6 +424,13 @@ void llama_kv_cache::clear(bool data) {
+@@ -376,6 +452,13 @@ void llama_kv_cache::clear(bool data) {
          for (auto & [_, buf] : ctxs_bufs) {
              ggml_backend_buffer_clear(buf.get(), 0);
          }
@@ -2128,7 +2169,7 @@ index a342ee119..2679ae525 100644
      }
  }
  
-@@ -1271,13 +1326,21 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
+@@ -1271,13 +1354,21 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
      const uint64_t kv_size      = get_size();
      const uint64_t n_embd_k_gqa = k->ne[0];
  
@@ -2153,7 +2194,7 @@ index a342ee119..2679ae525 100644
              ggml_row_size(k->type, n_embd_k_gqa),
              ggml_row_size(k->type, n_embd_k_gqa*kv_size),
              ggml_row_size(k->type, n_embd_k_gqa*kv_size)*sinfo.s0);
-@@ -1293,14 +1356,17 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
+@@ -1293,14 +1384,17 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
  
      // [TAG_V_CACHE_VARIABLE]
      assert(n_embd_v_gqa >= hparams.n_embd_v_gqa(il));
@@ -2173,7 +2214,7 @@ index a342ee119..2679ae525 100644
                  ggml_row_size(v->type, n_embd_v_gqa),                   // v->nb[2]
                  ggml_row_size(v->type, n_embd_v_gqa*kv_size),           // v->nb[3]
                  ggml_row_size(v->type, n_embd_v_gqa*kv_size)*sinfo.s0);
-@@ -1308,8 +1374,8 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
+@@ -1308,8 +1402,8 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
  
      // note: v->nb[1] > v->nb[2]
      return ggml_view_4d(ctx, v,
@@ -2184,7 +2225,7 @@ index a342ee119..2679ae525 100644
              ggml_row_size(v->type, kv_size),                        // v->nb[2]
              ggml_row_size(v->type, kv_size*n_embd_v_gqa),           // v->nb[3]
              ggml_row_size(v->type, kv_size*n_embd_v_gqa)*sinfo.s0);
-@@ -1322,10 +1388,17 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
+@@ -1322,10 +1416,17 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
  
      ggml_tensor * k = layers[ikv].k;
  
@@ -2203,7 +2244,7 @@ index a342ee119..2679ae525 100644
      const int64_t n_embd_gqa = n_embd_head*n_head;
  
      // we can merge dims 0 and 1
-@@ -1347,7 +1420,12 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
+@@ -1347,7 +1448,12 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
      }
  
      // store the current K values into the cache
@@ -2217,7 +2258,7 @@ index a342ee119..2679ae525 100644
  }
  
  ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const {
-@@ -1357,10 +1435,17 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
+@@ -1357,10 +1463,17 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
  
      auto * v = layers[ikv].v;
  
@@ -2236,7 +2277,7 @@ index a342ee119..2679ae525 100644
      const int64_t n_embd_gqa = n_embd_head*n_head;
  
      // we can merge dims 0 and 1
-@@ -1382,7 +1467,12 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
+@@ -1382,7 +1495,12 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
              v = ggml_reshape_2d(ctx, v, n_embd_gqa, kv_size*n_stream);
          }
  
@@ -2250,7 +2291,7 @@ index a342ee119..2679ae525 100644
      }
  
      if (ggml_row_size(v_cur->type, n_embd_gqa) == v_cur->nb[2]) {
-@@ -2245,11 +2335,8 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
+@@ -2245,11 +2363,8 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
      // Iterate and write all the keys first, each row is a cell
      // Get whole range at a time
      for (const auto & layer : layers) {
@@ -2263,7 +2304,7 @@ index a342ee119..2679ae525 100644
  
          // Write key type
          const int32_t k_type_i = (int32_t) k->type;
-@@ -2269,14 +2356,11 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
+@@ -2269,14 +2384,11 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
  
      if (!v_trans) {
          for (const auto & layer : layers) {
@@ -2279,7 +2320,7 @@ index a342ee119..2679ae525 100644
  
              // Write value type
              const int32_t v_type_i = (int32_t) v->type;
-@@ -2298,14 +2382,11 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
+@@ -2298,14 +2410,11 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
          const uint32_t kv_size = cells.size();
  
          for (const auto & layer : layers) {
@@ -2295,7 +2336,7 @@ index a342ee119..2679ae525 100644
  
              // Write value type
              const int32_t v_type_i = (int32_t) v->type;
-@@ -2551,9 +2632,8 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
+@@ -2551,9 +2660,8 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
      for (const auto & layer : layers) {
          const uint32_t il = layer.il;
  
@@ -2306,7 +2347,7 @@ index a342ee119..2679ae525 100644
  
          // Read type of key
          int32_t k_type_i_ref;
-@@ -2582,12 +2662,11 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
+@@ -2582,12 +2690,11 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
          for (const auto & layer : layers) {
              const uint32_t il = layer.il;
  
@@ -2320,7 +2361,7 @@ index a342ee119..2679ae525 100644
  
              // Read type of value
              int32_t v_type_i_ref;
-@@ -2616,12 +2695,11 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
+@@ -2616,12 +2723,11 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
          for (const auto & layer : layers) {
              const uint32_t il = layer.il;
  
@@ -2334,7 +2375,7 @@ index a342ee119..2679ae525 100644
  
              // Read type of value
              int32_t v_type_i_ref;
-@@ -2758,6 +2836,10 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
+@@ -2758,6 +2864,10 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
      return kv->get_v(ctx, il, n_kv, sinfos[i_cur]);
  }
  
