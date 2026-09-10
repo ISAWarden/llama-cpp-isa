@@ -46,12 +46,15 @@ For Vulkan, add `-DGGML_VULKAN=ON` when configuring CMake. The selector does not
 | --- | --- | --- |
 | `turboquant` | Experimental CPU implementations of 2/3/4-bit KV cache and TQ3_1S/TQ4_1S weight quantization | `-fa on -ctk turbo4_0 -ctv turbo4_0` |
 | `turboquant_vulkan` | Vulkan turbo4 KV storage, attention, and WHT rotation; requires `turboquant` | Build with Vulkan, use `-ctk turbo4_0 -ctv turbo4_0` |
+| `turboquant_metal` | Metal turbo2/3/4 KV writes and turbo4 attention; requires `turboquant` | Build with Metal, use `-fa on -ctk turbo4_0 -ctv turbo4_0` |
 | `moe_expert_cache` | Device-resident cache of MoE expert slices to reduce repeated host transfers | `--moe-expert-cache 1024` (MiB per participating backend; default 0 disables it) |
 | `emerald_mtp` | Persistent source-fragment speculation from imported text and verified conversations | `--spec-type emerald-mtp --spec-emerald-mtp-file ./emeraldmtp.bin` |
 
 | `hauhaucs_fastmtp` | HauhauCS FastMTP: Qwen3.5 MTP draft-vocabulary trimming and full-vocabulary logits mapping | `./configure.py --enable hauhaucs_fastmtp`; requires an MTP-only model with `d2t` and trimmed `output.weight` |
 
-TurboQuant provides experimental CPU reference implementations and Vulkan acceleration for turbo4/turbo4. Turbo2, turbo3, and TQ weights use CPU implementations. When a device cannot write the requested TurboQuant cache types (including Metal), that layer's K/V cache is allocated on CPU so cache writes can execute there. TurboQuant attention on Metal also uses CPU; this can reduce performance compared with Metal-supported cache formats such as `-ctk q8_0 -ctv q8_0`. Other model operations can still use Metal. Check startup logs for the actual placement and backend.
+TurboQuant provides experimental CPU reference implementations and optional Vulkan and Metal acceleration. Vulkan accelerates turbo4/turbo4, including WHT rotation. With `turboquant_metal`, Metal stores turbo2/3/4 caches using 128-element rotation groups and accelerates turbo4/turbo4 attention with equal padded K/V head sizes of 128, 256, or 512. Standalone WHT operations, turbo2/3 attention, mixed cache formats, and other head shapes use CPU fallback. TQ weights use CPU implementations. When a device cannot write the requested TurboQuant cache types, that layer's K/V cache is allocated on CPU. Check startup logs for actual placement; CPU fallback can reduce performance.
+
+The Metal patch ports cache writers and turbo4 dequantizers from `llama-cpp-isa-old` commit `93f2e936476141945eba00f12ce52706c9d9abd9` into the pinned upstream shader layout. Metal runtime correctness and performance require testing on a Mac. The release workflow compiles and links the affected shaders on its Apple Silicon runner as well as building the host code. For operation comparisons on a Mac, build `test-backend-ops` and run `test-backend-ops -b Metal -o SET_ROWS -p 'type_dst=turbo'` and `test-backend-ops -b Metal -o FLASH_ATTN_EXT -p 'type_K=turbo4_0'` (check `--help` for your build's filtering options).
 
 The MoE cache helps only workloads that transfer CPU-resident expert weights to a device. It needs additional device memory and is not a substitute for full expert offload. It falls back to host transfers if a cache allocation or copy cannot be used. Performance and long-context model quality require workload-specific evaluation.
 

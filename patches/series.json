@@ -13,6 +13,13 @@
       ]
     },
     {
+      "name": "turboquant_metal",
+      "description": "Metal turbo2/3/4 KV writes and turbo4 attention; CPU WHT fallback",
+      "requires": [
+        "turboquant"
+      ]
+    },
+    {
       "name": "moe_expert_cache",
       "description": "Optional device-resident MoE expert slice cache (--moe-expert-cache MiB)"
     },
