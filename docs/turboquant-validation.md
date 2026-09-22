@@ -1,7 +1,27 @@
 # TurboQuant KV engineering validation
 
-Work targets pinned upstream `5202104b59ada9005db079eea43882a2b7bf5802`.
-Feature implementations remain selectable patches; no upstream revision changes.
+Current pinned upstream: `0f8a414b7587bc412e44611d4c9e2fea876449a6`.
+Feature implementations remain selectable patches.
+
+## Current revision verification
+
+All six maintained patches apply individually with their dependencies and together.
+Selector all/none round trips restore pristine tracked upstream files. Release CPU
+builds (GCC 14.2, two jobs, RPC enabled) pass `test-turbo-quant`,
+`test-quantize-fns`, `test-arg-parser`, and `test-emerald-mtp`; `llama-server`
+builds and reports revision `0f8a414`.
+
+On Radeon 890M with Mesa 25.0.7, the Release Vulkan dependency-only build passes
+16 WHT/cache-chain, 6 SET_ROWS, and 11 turbo4 FLASH_ATTN_EXT cases. Vulkan cache
+writer thresholds now exactly match the CPU reference at ±0.145560 and ±0.013963.
+Two deterministic threshold-boundary cases (I32/I64 indices) fail with the former
+shader constants and pass with the correction, without changing tolerances.
+Metal C++ host syntax checks pass; current-pin Mac shader compilation and runtime
+verification remain pending. The release workflow is regenerated from this pin.
+
+The measurements and remote build results below are from upstream
+`5202104b59ada9005db079eea43882a2b7bf5802`; they do not establish performance,
+model quality, or cross-platform compilation on the current pin.
 
 ## Environment and limits
 

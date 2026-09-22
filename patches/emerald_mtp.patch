@@ -1,8 +1,8 @@
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index 36f1e0cd50f1b34b37df73eae9b13ce6ce244b87..c0662f92e238054dbeda4772dcffbea52f2f124b 100644
+index 2b307c59d32dce12cebfd181879ba59897b4b533..b45bafa7ee5686e76b57db0892ca39863e65f04b 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
-@@ -100,6 +100,8 @@ add_library(${TARGET}
+@@ -105,6 +105,8 @@ add_library(${TARGET}
      reasoning-budget.h
      sampling.cpp
      sampling.h
@@ -12,7 +12,7 @@ index 36f1e0cd50f1b34b37df73eae9b13ce6ce244b87..c0662f92e238054dbeda4772dcffbea5
      speculative.h
      subproc.cpp
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 015196ca1477182f4ebfceed2634609937e7143d..7db034d0846a5eb4e3d371da0033079ae476f875 100644
+index 63e342776d549b6abaf9c4aef5543a729e6dfd97..33bee60a8077364b2cf630b3da583081057b9647 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
 @@ -1,4 +1,5 @@
@@ -21,7 +21,7 @@ index 015196ca1477182f4ebfceed2634609937e7143d..7db034d0846a5eb4e3d371da0033079a
  
  #include "build-info.h"
  #include "chat.h"
-@@ -888,6 +889,16 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
+@@ -877,6 +878,16 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
      // parse all CLI args now, so that -hf is available below for remote preset resolution
      parse_cli_args();
  
@@ -38,7 +38,7 @@ index 015196ca1477182f4ebfceed2634609937e7143d..7db034d0846a5eb4e3d371da0033079a
      postprocess_cpu_params(params.cpuparams,       nullptr);
      postprocess_cpu_params(params.cpuparams_batch, &params.cpuparams);
  
-@@ -4273,6 +4284,40 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -4251,6 +4262,40 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.speculative.types.insert(params.speculative.types.end(), types.begin(), types.end());
          }
      ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
@@ -80,7 +80,7 @@ index 015196ca1477182f4ebfceed2634609937e7143d..7db034d0846a5eb4e3d371da0033079a
          {"--spec-ngram-mod-n-min"}, "N",
          string_format("minimum number of ngram tokens to use for ngram-based speculative decoding (default: %d)", params.speculative.ngram_mod.n_min),
 diff --git a/common/common.h b/common/common.h
-index 63d0badd0f7465b804b62128b64c5cc8dd115862..a69714b57b749b573674b9541bb4bdd3ef948c2e 100644
+index 7afc266acded2615fa7405ada4f9a109962d4844..532be9d5efc2056565f231dd67c4d4c95142c127 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -180,6 +180,7 @@ enum common_speculative_type {
@@ -942,7 +942,7 @@ index 0000000000000000000000000000000000000000..19a62e2794118d068cb13c3b80b76c56
 +    std::unique_ptr<impl> p;
 +};
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index 851a47b9a584bafd6f2beed011f5a7cde0a94eb3..37d6c98fae0b5f90a8d8b08bcc065bbbad885f3b 100644
+index 77dfe9535f3f5d41164b31c10d390699fcba274a..5b9cafddc67db4325122e29bc39361e6c11ba9a2 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
 @@ -1,4 +1,5 @@
@@ -969,7 +969,7 @@ index 851a47b9a584bafd6f2beed011f5a7cde0a94eb3..37d6c98fae0b5f90a8d8b08bcc065bbb
      virtual void begin(llama_seq_id seq_id, const llama_tokens & prompt) = 0;
  
      virtual bool process(const llama_batch & batch) = 0;
-@@ -1761,6 +1766,50 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+@@ -1767,6 +1772,50 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
  };
  
  // state of self-speculation (simple implementation, not ngram-map)
@@ -1020,7 +1020,7 @@ index 851a47b9a584bafd6f2beed011f5a7cde0a94eb3..37d6c98fae0b5f90a8d8b08bcc065bbb
  struct common_speculative_impl_ngram_simple : public common_speculative_impl {
      common_params_speculative_ngram_map params;
  
-@@ -2239,6 +2288,7 @@ const char * common_speculative_all_types_str() {
+@@ -2245,6 +2294,7 @@ const char * common_speculative_all_types_str() {
  
  std::string common_speculative_type_to_str(common_speculative_type type) {
      switch (type) {
@@ -1028,7 +1028,7 @@ index 851a47b9a584bafd6f2beed011f5a7cde0a94eb3..37d6c98fae0b5f90a8d8b08bcc065bbb
          case COMMON_SPECULATIVE_TYPE_NONE:          return "none";
          case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:  return "draft-simple";
          case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
-@@ -2347,6 +2397,9 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
+@@ -2353,6 +2403,9 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
              case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V:
                  n_max = std::max(n_max, (int32_t) spec->ngram_map_k4v.size_m);
                  break;
@@ -1038,7 +1038,7 @@ index 851a47b9a584bafd6f2beed011f5a7cde0a94eb3..37d6c98fae0b5f90a8d8b08bcc065bbb
              case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:
                  n_max = std::max(n_max, std::max(0, spec->ngram_mod.n_max));
                  break;
-@@ -2600,6 +2653,13 @@ common_speculative_output_limits common_speculative_get_output_limits(
+@@ -2617,6 +2670,13 @@ common_speculative_output_limits common_speculative_get_output_limits(
  // initialization of the speculative decoding system
  //
  common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq) {
@@ -1052,7 +1052,7 @@ index 851a47b9a584bafd6f2beed011f5a7cde0a94eb3..37d6c98fae0b5f90a8d8b08bcc065bbb
      // Compute the implementations to use based on the config and their order of preference
      std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
      {
-@@ -2612,10 +2672,11 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+@@ -2629,10 +2689,11 @@ common_speculative * common_speculative_init(common_params_speculative & params,
          };
  
          // when adding a new type - update here the logic above
@@ -1065,7 +1065,7 @@ index 851a47b9a584bafd6f2beed011f5a7cde0a94eb3..37d6c98fae0b5f90a8d8b08bcc065bbb
          add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
          add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
          add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
-@@ -2635,6 +2696,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+@@ -2652,6 +2713,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
          switch (config.type) {
              case COMMON_SPECULATIVE_TYPE_NONE:
                  break;
@@ -1075,7 +1075,7 @@ index 851a47b9a584bafd6f2beed011f5a7cde0a94eb3..37d6c98fae0b5f90a8d8b08bcc065bbb
              case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE: {
                  impls.push_back(std::make_unique<common_speculative_impl_draft_simple>(config.params, n_seq));
                  break;
-@@ -2761,6 +2825,16 @@ common_speculative_draft_params & common_speculative_get_draft_params(
+@@ -2778,6 +2842,16 @@ common_speculative_draft_params & common_speculative_get_draft_params(
      return spec->dparams[seq_id];
  }
  
@@ -1093,7 +1093,7 @@ index 851a47b9a584bafd6f2beed011f5a7cde0a94eb3..37d6c98fae0b5f90a8d8b08bcc065bbb
      if (spec == nullptr) {
          return;
 diff --git a/common/speculative.h b/common/speculative.h
-index 22505891f7efac13c45c07227f6f6aacc8f7e672..3490b7d9aa7fb6dbb001771cbdd47737cba5293a 100644
+index c968750e2d80e490f60ad365828552ad0c644c2f..c8fdbe8e9a11c864acd397238841bd3eddad3f99 100644
 --- a/common/speculative.h
 +++ b/common/speculative.h
 @@ -76,6 +76,11 @@ common_speculative_draft_params & common_speculative_get_draft_params(common_spe
@@ -1109,7 +1109,7 @@ index 22505891f7efac13c45c07227f6f6aacc8f7e672..3490b7d9aa7fb6dbb001771cbdd47737
  bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
  
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index c46377c7623d4d517318eb15152f8afee96fb3f1..ee30b950be5347eee454c022dbb6101c6d06e426 100644
+index 9b3a4fcc4bbf6afc77cc8554fa14412722b887b4..887766e2f647d980df353e5d9087bee703bdf2a1 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -116,6 +116,12 @@ function(llama_build_and_test source)
@@ -1689,7 +1689,7 @@ index 0000000000000000000000000000000000000000..f3d628f0335d680efcee6733d3e527fe
 +    main()
 diff --git a/tests/test-emerald-mtp.cpp b/tests/test-emerald-mtp.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..154850a9ea089c552577f14b371c966ca24bfb5b
+index 0000000000000000000000000000000000000000..77f29d32fcf0bd8b89f24397bf9cdf73eaaacbbe
 --- /dev/null
 +++ b/tests/test-emerald-mtp.cpp
 @@ -0,0 +1,406 @@
@@ -1859,7 +1859,7 @@ index 0000000000000000000000000000000000000000..154850a9ea089c552577f14b371c966c
 +            CHECK(common_speculative_n_max(spec.get()) == 16);
 +            llama_tokens prompt, result;
 +            auto & dp = common_speculative_get_draft_params(spec.get(), 0);
-+            dp.prompt = &prompt; dp.result = &result; dp.id_last = 1; dp.n_past = 0;
++            dp.prompt = &prompt; dp.result = &result; dp.id_last = 1; dp.pos0 = 0;
 +            for (int budget : {0, 1, 2}) {
 +                result.clear(); dp.drafting = true; dp.n_max = budget;
 +                common_speculative_draft(spec.get());
@@ -1910,7 +1910,7 @@ index 0000000000000000000000000000000000000000..154850a9ea089c552577f14b371c966c
 +            CHECK(common_speculative_n_max(spec.get()) == 64);
 +            llama_tokens prompt{1}, result;
 +            auto & dp = common_speculative_get_draft_params(spec.get(), 0);
-+            dp.prompt = &prompt; dp.result = &result; dp.id_last = 2; dp.n_past = 1;
++            dp.prompt = &prompt; dp.result = &result; dp.id_last = 2; dp.pos0 = 1;
 +            dp.n_max = 1; dp.drafting = true; common_speculative_draft(spec.get());
 +            CHECK(result == llama_tokens({9}));
 +        }
@@ -1920,7 +1920,7 @@ index 0000000000000000000000000000000000000000..154850a9ea089c552577f14b371c966c
 +            common_speculative_ptr spec(common_speculative_init(manual, 1));
 +            llama_tokens prompt{1}, result;
 +            auto & dp = common_speculative_get_draft_params(spec.get(), 0);
-+            dp.prompt = &prompt; dp.result = &result; dp.id_last = 2; dp.n_past = 1;
++            dp.prompt = &prompt; dp.result = &result; dp.id_last = 2; dp.pos0 = 1;
 +            dp.drafting = true; common_speculative_draft(spec.get());
 +            CHECK(result.empty());
 +        }
@@ -2478,7 +2478,7 @@ index 0000000000000000000000000000000000000000..c10e61b6a1dd17f417b8c046eda30762
 +    } catch (const std::exception & e) { std::fprintf(stderr, "pretrain-emerald-mtp: %s\n", e.what()); return 1; }
 +}
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index f78cfb36dd7dbeae8a144319d6d328ec5a1fda0f..6fedc6582dcb90285eff50d7c22cd46641dc9e71 100644
+index b6835e43459e3e9f1ea951e9f96f9ade22074cba..ce0b4a93d903320e7ccd2b73d7f6ddb59ef04ce2 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
 @@ -1258,15 +1258,33 @@ private:
@@ -2532,7 +2532,7 @@ index f78cfb36dd7dbeae8a144319d6d328ec5a1fda0f..6fedc6582dcb90285eff50d7c22cd466
          return slot.has_next_token; // continue
      }
  
-@@ -3820,6 +3840,9 @@ private:
+@@ -3836,6 +3856,9 @@ private:
                  // prompt evaluated for next-token prediction
                  slot.state = SLOT_STATE_GENERATING;
  
