@@ -1,5 +1,5 @@
 {
-  "base": "5202104b59ada9005db079eea43882a2b7bf5802",
+  "base": "0f8a414b7587bc412e44611d4c9e2fea876449a6",
   "features": [
     {
       "name": "turboquant",
@@ -7,14 +7,14 @@
     },
     {
       "name": "turboquant_vulkan",
-      "description": "Vulkan turbo4 KV cache and WHT acceleration",
+      "description": "Vulkan turbo4 KV cache, scalar/CM1 attention, and scaled WHT acceleration",
       "requires": [
         "turboquant"
       ]
     },
     {
       "name": "turboquant_metal",
-      "description": "Metal turbo2/3/4 KV writes and turbo4 attention; CPU WHT fallback",
+      "description": "Metal turbo2/3/4 KV writes, turbo4 attention, and native WHT (Mac validation pending)",
       "requires": [
         "turboquant"
       ]

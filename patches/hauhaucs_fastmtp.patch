@@ -1,5 +1,5 @@
 diff --git a/src/models/qwen35.cpp b/src/models/qwen35.cpp
-index a1e2635..7fd04b9 100644
+index a1e263500ee8681dfd8736c81ec7d3f5ae7ce911..7fd04b9db70acbca84664a2e861ef906695253d1 100644
 --- a/src/models/qwen35.cpp
 +++ b/src/models/qwen35.cpp
 @@ -37,14 +37,24 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {

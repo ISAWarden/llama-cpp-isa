@@ -1,0 +1,24 @@
+{
+  "date": "2026-09-22",
+  "parent_commit": "d2478b89c849522a8d1727d0aaad726201c48510",
+  "upstream": "5202104b59ada9005db079eea43882a2b7bf5802",
+  "patch_sha256": {
+    "turboquant": "0537c484d9cbf7c74a8708230cc6a1db655fc5f5916419e577937ba91812b497",
+    "turboquant_vulkan": "37cd458db8ab13d4d2b3a606b4e8984b84dee6859c392f7017c35b5aea591eae",
+    "turboquant_metal": "b1fe2a76aa38c6848da450b37e55766562d4ccbf9089aa1c4e1ed5d0d453f69e"
+  },
+  "benchmark_libraries_sha256": {
+    "optimized_final_format_comparison": "8f299934f1ac0d2f09f872d2b5d994ee8efca121609d78405453346202fbf7e7",
+    "scalar_ab_reference": "932f0b2d97f527b3a523d25ec9c4182a14b11ed4416930f61adc2adc10cf03f3"
+  },
+  "flags": {
+    "CMAKE_BUILD_TYPE": "Release",
+    "GGML_NATIVE": true,
+    "GGML_VULKAN": true,
+    "parallel_build_jobs": 2
+  },
+  "notes": [
+    "The optimized paired runs precede the final uint32 WHT-size capability guard; their library hash was not retained. Final format-comparison library hash is recorded.",
+    "Original scalar and shared WHT reference already includes the scale/group semantics fixes and four-comparison writer."
+  ]
+}
