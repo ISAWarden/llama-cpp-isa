@@ -1,5 +1,37 @@
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
+index c296d17b15712be1e75b12b8c18079aa2da7d7d0..76773f68499cf611d13bfe44162d3b31f89f61c4 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
+@@ -1321,6 +1321,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_argsort_merge(gg
+     return res;
+ }
+
++ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_turbo_wht(ggml_metal_library_t lib) {
++    const char * name = "kernel_turbo_wht_f32";
++    auto res = ggml_metal_library_get_pipeline(lib, name);
++    if (!res.pipeline) {
++        res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
++    }
++    return res;
++}
++
+ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_fwht(ggml_metal_library_t lib, int n) {
+     char base[256];
+     char name[256];
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
+index 31fc07d44d47c09573401644d4b22a966c2cd5d8..32a82f9f7ec33c56dac19c0083d13c603e1f732f 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.h
++++ b/ggml/src/ggml-metal/ggml-metal-device.h
+@@ -143,6 +143,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_argmax            (ggml_metal_library_t lib, const struct ggml_tensor * op);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_argsort           (ggml_metal_library_t lib, const struct ggml_tensor * op);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_argsort_merge     (ggml_metal_library_t lib, const struct ggml_tensor * op);
++struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_turbo_wht(ggml_metal_library_t lib);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_fwht              (ggml_metal_library_t lib, int n);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k             (ggml_metal_library_t lib, const struct ggml_tensor * op);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k_radix       (ggml_metal_library_t lib, const struct ggml_tensor * op);
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index afd6f521011e1b3468ce1bc2ab62ff330c67576f..46f6e16fd5b7dee85c8f4a8ebb641114a6cd683f 100644
+index afd6f521011e1b3468ce1bc2ab62ff330c67576f..449d0b3a10bc3078b48d6dda5882f6f5dd0ecb69 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -1481,12 +1481,17 @@ void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t
@@ -20,7 +52,27 @@ index afd6f521011e1b3468ce1bc2ab62ff330c67576f..46f6e16fd5b7dee85c8f4a8ebb641114
          op->src[0]->type == GGML_TYPE_NVFP4 ||
          op->src[0]->type == GGML_TYPE_TQ1_0) {
          return false;
-@@ -1703,6 +1708,15 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1616,6 +1621,19 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+                         return false;
+                 }
+             }
++        case GGML_OP_TURBO_WHT: {
++            int direction, group_size;
++            memcpy(&direction, op->op_params, sizeof(int));
++            memcpy(&group_size, op->op_params + sizeof(int), sizeof(int));
++            const struct ggml_tensor * scale = op->src[1];
++            return (direction == 0 || direction == 1) &&
++                   (group_size == 32 || group_size == 64 || group_size == 128) &&
++                   op->src[0]->ne[0] % group_size == 0 &&
++                   op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
++                   ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op) &&
++                   (!scale || (scale->type == GGML_TYPE_F32 && ggml_is_contiguous(scale) &&
++                               ggml_nelements(scale) >= group_size));
++        }
+         case GGML_OP_ADD:
+         case GGML_OP_SUB:
+         case GGML_OP_MUL:
+@@ -1703,6 +1721,15 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
          case GGML_OP_ROLL:
              return ggml_is_contiguous(op->src[0]);
          case GGML_OP_FLASH_ATTN_EXT:
@@ -36,7 +88,7 @@ index afd6f521011e1b3468ce1bc2ab62ff330c67576f..46f6e16fd5b7dee85c8f4a8ebb641114
              // for new head sizes, add checks here
              if (op->src[0]->ne[0] != 32 &&
                  op->src[0]->ne[0] != 40 &&
-@@ -1889,10 +1903,20 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1889,10 +1916,20 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                  };
              }
          case GGML_OP_GET_ROWS:
@@ -57,6 +109,76 @@ index afd6f521011e1b3468ce1bc2ab62ff330c67576f..46f6e16fd5b7dee85c8f4a8ebb641114
                  if (op->src[0]->type == GGML_TYPE_F16) {
                      return op->type == GGML_TYPE_F16;
                  }
+diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
+index 30e40f527f907c3ec03baa7d80892672f6cac945..65835c39f7c2a79fb1ff51500cf8f4ea48da6013 100644
+--- a/ggml/src/ggml-metal/ggml-metal-impl.h
++++ b/ggml/src/ggml-metal/ggml-metal-impl.h
+@@ -1217,6 +1217,13 @@ typedef struct {
+     int32_t nrows;
+ } ggml_metal_kargs_fwht;
+
++typedef struct {
++    int32_t direction;
++    int32_t group_size;
++    int32_t has_scale;
++} ggml_metal_kargs_turbo_wht;
++
++
+ typedef struct {
+     int64_t  ne0;
+     float    start;
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 3db8bca4375295b3035b16babc467cec7687e715..488826764a891a6ffb19f993de371afdaf4794f2 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -376,6 +376,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
+             {
+                 n_fuse = ggml_metal_op_diag(ctx, idx);
+             } break;
++        case GGML_OP_TURBO_WHT:
++            {
++                n_fuse = ggml_metal_op_turbo_wht(ctx, idx);
++            } break;
+         case GGML_OP_L2_NORM:
+             {
+                 n_fuse = ggml_metal_op_l2_norm(ctx, idx);
+@@ -2248,6 +2252,24 @@ static bool ggml_metal_fwht_supported_size(int64_t n) {
+     return n == 64 || n == 128 || n == 256 || n == 512;
+ }
+
++int ggml_metal_op_turbo_wht(ggml_metal_op_t ctx, int idx) {
++    ggml_tensor * op = ctx->node(idx);
++    ggml_metal_kargs_turbo_wht args = {};
++    memcpy(&args.direction, op->op_params, sizeof(int32_t));
++    memcpy(&args.group_size, op->op_params + sizeof(int32_t), sizeof(int32_t));
++    args.has_scale = op->src[1] != nullptr;
++    auto pipeline = ggml_metal_library_get_pipeline_turbo_wht(ctx->lib);
++    auto enc = ctx->enc;
++    ggml_metal_encoder_set_pipeline(enc, pipeline);
++    ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
++    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 1);
++    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 2);
++    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1] ? op->src[1] : op->src[0]), 3);
++    ggml_metal_encoder_set_threadgroup_memory_size(enc, 128*sizeof(float), 0);
++    ggml_metal_encoder_dispatch_threadgroups(enc, ggml_nelements(op)/args.group_size, 1, 1, args.group_size, 1, 1);
++    return 1;
++}
++
+ int ggml_metal_op_fwht(ggml_metal_op_t ctx, int idx) {
+     ggml_tensor * op = ctx->node(idx);
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.h b/ggml/src/ggml-metal/ggml-metal-ops.h
+index f8fe50b468e4b83c410d20855900f91f18ac83c4..25d8ab9cc61e14d30b711c7f3ac9b97b475c5671 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.h
++++ b/ggml/src/ggml-metal/ggml-metal-ops.h
+@@ -68,6 +68,7 @@ int ggml_metal_op_set               (ggml_metal_op_t ctx, int idx);
+ int ggml_metal_op_cpy               (ggml_metal_op_t ctx, int idx);
+ int ggml_metal_op_pool_1d           (ggml_metal_op_t ctx, int idx);
+ int ggml_metal_op_pool_2d           (ggml_metal_op_t ctx, int idx);
++int ggml_metal_op_turbo_wht(ggml_metal_op_t ctx, int idx);
+ int ggml_metal_op_fwht              (ggml_metal_op_t ctx, int idx);
+ int ggml_metal_op_mul_mat           (ggml_metal_op_t ctx, int idx);
+ int ggml_metal_op_mul_mat_id        (ggml_metal_op_t ctx, int idx);
 diff --git a/ggml/src/ggml-metal/kernels/dequantize.h b/ggml/src/ggml-metal/kernels/dequantize.h
 index 0d1429d9d368255f15bd77cecc962fb90d819556..b5af4cc80da32e765cd80fdee75c614adaf38571 100644
 --- a/ggml/src/ggml-metal/kernels/dequantize.h
@@ -155,10 +277,10 @@ index d0e928d732cc8dea76cecee3c4e13a0c8f1458a5..18faacaa397ad0e289814c34d3bfcf9c
  #undef FA_TYPES_F32
 
 diff --git a/ggml/src/ggml-metal/kernels/quantize.metal b/ggml/src/ggml-metal/kernels/quantize.metal
-index 42ca6d74a0bdbc756331a0dda22d51ff0a281d0e..9ca49b6b5ccbdc16cd143e4e1ac92cb84fa3ee9d 100644
+index 42ca6d74a0bdbc756331a0dda22d51ff0a281d0e..6e60bd1b001ca26cc0caa0c7798635ecb684dbcf 100644
 --- a/ggml/src/ggml-metal/kernels/quantize.metal
 +++ b/ggml/src/ggml-metal/kernels/quantize.metal
-@@ -478,3 +478,283 @@ typedef decltype(kernel_set_rows_q<float, int64_t, QK_K, block_tq2_0, quantize_t
+@@ -478,3 +478,312 @@ typedef decltype(kernel_set_rows_q<float, int64_t, QK_K, block_tq2_0, quantize_t
  template [[host_name("kernel_set_rows_f32_i64_tq2_0")]]  kernel set_rows_qK_t kernel_set_rows_q<float, int64_t, QK_K, block_tq2_0, quantize_tq2_0>;
  template [[host_name("kernel_set_rows_f32_i32_tq2_0")]]  kernel set_rows_qK_t kernel_set_rows_q<float, int32_t, QK_K, block_tq2_0, quantize_tq2_0>;
 
@@ -168,6 +290,35 @@ index 42ca6d74a0bdbc756331a0dda22d51ff0a281d0e..9ca49b6b5ccbdc16cd143e4e1ac92cb8
 +    -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f};
 +constant float turbo_wht_signs2[128] = {
 +    1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f};
++
++// Standalone signed/normalized WHT, including the optional per-element scale.
++// A workgroup owns one rotation group; no CPU synchronization is required.
++kernel void kernel_turbo_wht_f32(
++        constant ggml_metal_kargs_turbo_wht & args,
++        device const float * src,
++        device float * dst,
++        device const float * scale,
++        threadgroup float * x [[threadgroup(0)]],
++        uint group [[threadgroup_position_in_grid]],
++        uint lane [[thread_position_in_threadgroup]]) {
++    const uint64_t base = uint64_t(group) * uint64_t(args.group_size);
++    const float first = args.direction == 0 ? turbo_wht_signs1[lane] : turbo_wht_signs2[lane];
++    const float last = args.direction == 0 ? turbo_wht_signs2[lane] : turbo_wht_signs1[lane];
++    float value = src[base + lane] * first;
++    if (args.has_scale) value *= scale[lane];
++    x[lane] = value;
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++    for (uint h = 1; h < uint(args.group_size); h *= 2) {
++        if ((lane & h) == 0) {
++            const float a = x[lane];
++            const float b = x[lane + h];
++            x[lane] = a + b;
++            x[lane + h] = a - b;
++        }
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++    }
++    dst[base + lane] = x[lane] * (1.0f/sqrt(float(args.group_size))) * last;
++}
 +
 +static void turbo_fwht_128(thread float * x) {
 +    for (int h = 1; h < 128; h *= 2) {
@@ -443,10 +594,10 @@ index 42ca6d74a0bdbc756331a0dda22d51ff0a281d0e..9ca49b6b5ccbdc16cd143e4e1ac92cb8
 +template [[host_name("kernel_set_rows_f32_i64_turbo4_0")]] kernel set_rows_turbo4_t kernel_set_rows_turbo4<int64_t>;
 +template [[host_name("kernel_set_rows_f32_i32_turbo4_0")]] kernel set_rows_turbo4_t kernel_set_rows_turbo4<int32_t>;
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 4f74995faf03fe06515687dd745d430e13d36efe..f178274686752b3bac0a1953581bbd2303afcac6 100644
+index c9a80258df906d92ff47c29019bd9ce0dc55ecd9..812fb0f540b7a5703a3c2560e5807402ae01a00b 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
-@@ -10507,6 +10507,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -10590,6 +10590,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_flash_attn_ext(64, 128, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q2_0));
      test_cases.emplace_back(new test_flash_attn_ext(128, 64, 4, {1, 1}, 64, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q2_0, GGML_TYPE_F16));
 
