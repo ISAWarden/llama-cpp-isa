@@ -48,8 +48,8 @@ end-to-end speedup.
   shared memory only for cross-subgroup stages. Devices lacking the required
   fixed/full subgroup capabilities retain the shared-memory kernel.
 - Metal adds standalone WHT using the existing signed rotation tables, optional
-  scales and cooperative workgroup butterflies. C++ host syntax checks pass;
-  Objective-C host and Metal shader compilation/runtime testing require a Mac.
+  scales and cooperative workgroup butterflies. C++ host syntax checks and remote
+  macOS host/shader builds pass; runtime correctness and performance testing still require a Mac.
 - `llama-bench` accepts canonical `turbo2_0`, `turbo3_0`, `turbo4_0` cache names.
 
 ## Reproduction
@@ -85,21 +85,22 @@ c++ -O3 -march=native -I "$source/ggml/include" scripts/bench-turbo-dot.cpp \
 
 ## Backend scope
 
-| Backend | Local status and remaining work |
+| Backend | Validation status and remaining work |
 | --- | --- |
 | CPU | Allocation removal and numerical regression tests; measurement below |
 | AMD Vulkan | WHT, writes and turbo4 attention compiled and operator-tested; measurement below |
-| HIP/ROCm | Source reviewed; local toolchain/runtime blocked; native cache chain still missing |
-| CUDA / MUSA | Shared sources reviewed; SET_ROWS whitelist rejects TurboQuant; no native chain or hardware validation |
-| Metal | Native standalone WHT added; C++ host syntax checked; Objective-C/shader compilation, runtime correctness and performance pending |
-| SYCL | Capability reporting corrected; oneAPI compilation/runtime pending |
+| HIP/ROCm | Linux and Windows ROCm release builds pass; local runtime blocked; native cache chain still missing |
+| CUDA / MUSA | Windows CUDA 12.4/13.3 x64 and 13.4 ARM64 builds pass; MUSA source reviewed only; no native TurboQuant chain or hardware validation |
+| Metal | Native standalone WHT added; remote macOS ARM64 host and Metal shader compilation/linking pass; runtime correctness and performance pending |
+| SYCL | Capability reporting corrected; Linux FP16/FP32 and Windows oneAPI builds pass; runtime fallback testing pending |
 | RPC | Conservative rejection added; remote runtime not tested |
 | OpenCL / WebGPU / CANN / Hexagon / ET | Source-level writer restrictions exclude TurboQuant; no native implementation or local runtime validation |
 | OpenVINO | Source-level supported-type restrictions exclude TurboQuant; no native lowering validated |
 | VirtGPU | Forwards support queries to its backing backend; transport/runtime validation pending |
 | BLAS / ZenDNN / zDNN | Auxiliary backend roles; no claim of a native TurboQuant KV pipeline |
 
-No remote build was dispatched, and no commit or push was made.
+Remote build-only verification was authorized and dispatched on the separate
+`turboquant-amd-verification` branch; see the remote verification results below.
 
 ## Local correctness results
 
@@ -200,11 +201,9 @@ Reproduce the matching format cases with:
 Native HIP/CUDA/MUSA writers, signed/scaled WHT and attention are still missing;
 no new accelerator patch advertises partial support. The installed HIP stack
 must first be upgraded to a version supported by the pinned tree and pass a
-minimal runtime smoke test. SYCL compilation and capability fallback testing,
-RPC remote testing, and Mac shader/runtime testing are pending. GitHub API
-authentication is available, but commit/push/workflow dispatch require explicit
-authorization; pushing the current `main` branch could publish a prerelease.
-Use a separate branch and `create_release=false` for build-only verification.
+minimal runtime smoke test. SYCL capability fallback testing, RPC remote
+testing, and Mac runtime testing are pending. Remote compilation does not
+establish backend execution correctness, quality, or performance.
 
 Pristine-upstream model comparisons, FP16 patch-overhead comparisons, perplexity,
 long-context retrieval, concurrent serving, MoE cache behavior, profiler traces,
@@ -235,3 +234,29 @@ original selection remain intact: `turboquant`, `turboquant_vulkan`,
 It still contains the previously applied patch versions. After its workload
 has stopped, reapply with `./configure.py --all` and rebuild to use these exports.
 Do not switch it while that server is running.
+
+## Remote compile verification
+
+The build-only [verification run](https://github.com/ISAWarden/llama-cpp-isa/actions/runs/35713214957)
+passed at `a579a8c486125758258fc666837110e2a9765d95` on branch
+`turboquant-amd-verification`. All 23 platform/UI build jobs, source preparation,
+and final packaging succeeded. Publication was skipped (`create_release=false`).
+Commits were made without GPG signing; neither the upstream pin nor gitlink changed.
+
+The matrix covers macOS ARM64/Intel, iOS, Android ARM64, Linux x64/ARM64 CPU and
+Vulkan, Linux ROCm/OpenVINO/SYCL FP16 and FP32, Windows x64/ARM64 CPU, Windows
+Vulkan/OpenCL/ROCm/OpenVINO/SYCL, and Windows CUDA 12.4/13.3 x64 and 13.4 ARM64.
+The macOS ARM64 job explicitly compiled and linked the TurboQuant Metal shaders.
+
+The [first run](https://github.com/ISAWarden/llama-cpp-isa/actions/runs/35712572099)
+found an Android SDK setup error: the setup action requested the retired `tools`
+package before compilation. The workflow generator now explicitly requests
+`platform-tools`; its generated workflow passes the drift check. The retry passed
+Android. The first Windows ROCm job exceeded its three-hour execution limit;
+its retry succeeded. No feature source compilation fixes were required by this matrix.
+
+Local checks for the workflow fix: generator regeneration and `--check`, release
+packaging tests, and `git diff --check` pass. Feature patch hashes remain those in
+the validation manifest. These remote results validate compilation and packaging,
+not GPU runtime correctness, inference performance, model quality, or native
+TurboQuant support on backends that still use CPU fallback.
