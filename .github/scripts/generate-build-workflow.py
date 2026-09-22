@@ -73,6 +73,10 @@ def generate():
                               'env': {'RELEASE_TAG': '${{ inputs.tag }}'},
                               'run': 'echo "ui_version=$RELEASE_TAG" >> "$GITHUB_OUTPUT"'})
             else:
+                if uses.startswith('android-actions/setup-android@'):
+                    # The action defaults to the retired SDK "tools" package.
+                    # Command-line tools are installed by the action; NDK follows.
+                    step.setdefault('with', {})['packages'] = 'platform-tools'
                 if uses.startswith('actions/upload-artifact@'):
                     step.setdefault('with', {})['if-no-files-found'] = 'error'
                     step['with']['retention-days'] = 7
