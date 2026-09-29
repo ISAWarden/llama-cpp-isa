@@ -24,7 +24,7 @@ For scripts:
 ```sh
 ./configure.py --list
 ./configure.py --all
-./configure.py --enable turboquant turboquant_vulkan  # exact selection
+./configure.py --enable quant_type_slots turboquant turboquant_vulkan  # exact selection
 ./configure.py --enable moe_expert_cache
 ./configure.py --none                               # back to upstream
 ```
@@ -46,12 +46,16 @@ For Vulkan, add `-DGGML_VULKAN=ON` when configuring CMake. The selector does not
 
 | Patch | What it adds | Usage |
 | --- | --- | --- |
+| `prism` | Prism PTQ1_0/PQ2_0 weights and folded Hadamard models; CPU, CUDA/HIP, Metal, Vulkan and SYCL | `./configure.py --enable quant_type_slots prism`; [usage and validation](docs/prism.md) |
+| `quant_type_slots` | Shared private type-table capacity required by Prism and TurboQuant | Selected automatically by the interactive selector; include explicitly with CLI `--enable` |
 | `turboquant` | Experimental CPU implementations of 2/3/4-bit KV cache and TQ3_1S/TQ4_1S weight quantization | `-fa on -ctk turbo4_0 -ctv turbo4_0` |
 | `turboquant_vulkan` | Vulkan turbo4 KV storage, scalar/CM1 attention, and scaled WHT rotation; requires `turboquant` | Build with Vulkan, use `-ctk turbo4_0 -ctv turbo4_0` |
 | `turboquant_metal` | Metal turbo2/3/4 KV writes, turbo4 attention and native WHT; requires `turboquant` | Build with Metal, use `-fa on -ctk turbo4_0 -ctv turbo4_0` |
 | `moe_expert_cache` | Device-resident cache of MoE expert slices to reduce repeated host transfers | `--moe-expert-cache 1024` (MiB per participating backend; default 0 disables it) |
 | `emerald_mtp` | Persistent source-fragment speculation from imported text and verified conversations | `--spec-type emerald-mtp --spec-emerald-mtp-file ./emeraldmtp.bin` |
 | `hauhaucs_fastmtp` | HauhauCS FastMTP: Qwen3.5 MTP draft-vocabulary trimming and full-vocabulary logits mapping | `./configure.py --enable hauhaucs_fastmtp`; requires an MTP-only model with `d2t` and trimmed `output.weight` |
+
+Prism and TurboQuant both require `quant_type_slots`; their tensor IDs remain distinct and unchanged.
 
 TurboQuant provides experimental CPU reference implementations and optional Vulkan and Metal acceleration. Vulkan accelerates turbo4/turbo4 with modern scalar attention and cooperative-matrix (CM1) prefill where device and shape checks permit. A single effective attention row retains the scalar path; grouped-query decode may use CM1. WHT supports 32/64/128-element groups and optional scales; subgroup shuffles accelerate supported devices, with a shared-memory fallback. With `turboquant_metal`, Metal stores turbo2/3/4 caches using 128-element rotation groups and accelerates turbo4/turbo4 attention with equal padded K/V head sizes of 128, 256, or 512. The Metal patch includes native standalone F32 WHT for 32/64/128-element groups and optional scales. It has been run successfully on a Mac Studio. Turbo2/3 attention, mixed cache formats, and other head shapes use CPU fallback. TQ weights use CPU implementations. When a device cannot write the requested TurboQuant cache types, that layer's K/V cache is allocated on CPU. Check startup logs for actual placement; CPU fallback can reduce performance.
 

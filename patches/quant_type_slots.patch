@@ -1,0 +1,13 @@
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+index 224bdef927ac90bfa07ee39db3247b7bac4f14ec..51c680c30e1a2761b1e894d71f1eae6bf1e79c9d 100644
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -430,7 +430,7 @@ extern "C" {
+         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
+         GGML_TYPE_Q1_0    = 41,
+         GGML_TYPE_Q2_0    = 42,
+-        GGML_TYPE_COUNT   = 43,
++        GGML_TYPE_COUNT   = 144, // reserve private format IDs through Prism PTQ1_0 (143)
+     };
+ 
+     // [TAG_GGML_PREC]

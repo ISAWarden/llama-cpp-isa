@@ -2,8 +2,15 @@
   "base": "0f8a414b7587bc412e44611d4c9e2fea876449a6",
   "features": [
     {
+      "name": "quant_type_slots",
+      "description": "Shared private quantization type table capacity for TurboQuant and Prism"
+    },
+    {
       "name": "turboquant",
-      "description": "Experimental 2/3/4-bit KV cache and TQ3_1S/TQ4_1S weights; CPU implementation"
+      "description": "Experimental 2/3/4-bit KV cache and TQ3_1S/TQ4_1S weights; CPU implementation",
+      "requires": [
+        "quant_type_slots"
+      ]
     },
     {
       "name": "turboquant_vulkan",
@@ -30,6 +37,13 @@
     {
       "name": "emerald_mtp",
       "description": "Persistent source-fragment speculation from imported text and verified conversations"
+    },
+    {
+      "name": "prism",
+      "description": "Prism PTQ1_0/PQ2_0 weights and folded Hadamard models; CPU, CUDA/HIP, Metal, Vulkan, SYCL",
+      "requires": [
+        "quant_type_slots"
+      ]
     }
   ]
 }
